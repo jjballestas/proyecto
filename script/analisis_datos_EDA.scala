@@ -9,12 +9,19 @@ val REALIZAR_EDA = true
 
 val spark = SparkSession.builder().appName("EDA Regresion").master("local[*]").getOrCreate()
 val df = Utils.loadOrProcessData( spark, PATH, RAWDATA, PARQUET, REALIZAR_EDA)
+println(s"📌 Filas: ${df.count()}  |  Columnas: ${df.columns.length}\n")
+
+println("📌 Esquema del DataFrame:")
+df.printSchema()
+println("\n")
 
 if (REALIZAR_EDA) {
   println("=== Análisis Exploratorio de Datos ===")
   Utils.analisisEDA(df)
-  Utils.showTable(df, 10)
+  //Utils.showTable(df, 10)
 } else {
   println("=== Datos procesados cargados ===")
-  Utils.showTable(df, 10)
+ // Utils.showTable(df, 10)
 }
+ 
+Utils.imprimirDiccionarioAnalisis(df)
