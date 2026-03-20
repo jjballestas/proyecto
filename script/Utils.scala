@@ -15,6 +15,70 @@ def loadData(spark: SparkSession, path: String, filename: String): DataFrame = {
 }
 
 
+def analisisEDA(df: DataFrame): Unit = {
+  println("\n==================== EDA: Análisis Exploratorio ====================\n")
+
+  println("📌 Valores nulos por columna:")
+  df.dtypes.foreach {
+    case (colName, "DoubleType") | (colName, "FloatType") =>
+      val nulls = df.filter(
+        col(colName).isNull || isnan(col(colName))
+      ).count()
+      println(f" - $colName%-25s : $nulls")
+
+    case (colName, "StringType") =>
+      val nulls = df.filter(
+        col(colName).isNull || trim(col(colName)) === ""
+      ).count()
+      println(f" - $colName%-25s : $nulls")
+
+    case (colName, _) =>
+      val nulls = df.filter(
+        col(colName).isNull
+      ).count()
+      println(f" - $colName%-25s : $nulls")
+  }
+  println()
+
+  println("📌 Estadísticos descriptivos:")
+  df.describe().show(false)
+
+  val dup = df.count() - df.dropDuplicates().count()
+  println(s"\n📌 Filas duplicadas: $dup\n")
+
+  println("📌 Distribución de variables numéricas:")
+  df.dtypes
+    .filter(t => t._2 == "IntegerType" || t._2 == "DoubleType" || t._2 == "FloatType")
+    .foreach { case (colName, _) =>
+      println(s"\n - Distribución de $colName:")
+      df.select(colName).describe().show()
+    }
+
+  println("\n📌 Top categorías por columna categórica:")
+  val categoricasUtiles = Seq(
+    "body_type",
+    "fuel_type",
+    "make_name",
+    "model_name",
+    "transmission",
+    "transmission_display",
+    "wheel_system",
+    "wheel_system_display",
+    "listing_color",
+    "exterior_color",
+    "interior_color",
+    "trim_name"
+  ).filter(df.columns.contains)
+
+  categoricasUtiles.foreach { colName =>
+    println(s"\n - $colName:")
+    df.groupBy(colName).count().orderBy(desc("count")).show(10, truncate = true)
+  }
+
+  println("\n==================== Fin del EDA ====================\n")
+}
+
+
 def imprimirDiccionarioAnalisis(df: DataFrame): Unit = {
 
   case class InfoColumna(
@@ -503,13 +567,7 @@ def imprimirDiccionarioAnalisis(df: DataFrame): Unit = {
   // ---------------------------------------------------------
   // Pipeline: cargar CSV o parquet, procesar si es necesario
   // ---------------------------------------------------------
-  def loadOrProcessData(
-      spark: SparkSession,
-      basepath: String,
-      rawFile: String,
-      parquetPath: String,
-      realizarEda: Boolean
-  ): DataFrame = {
+  def loadOrProcessData( spark: SparkSession, basepath: String, rawFile: String, parquetPath: String, realizarEda: Boolean ): DataFrame = {
 
     val parquetFullPath = basepath + parquetPath
 
@@ -546,58 +604,14 @@ def imprimirDiccionarioAnalisis(df: DataFrame): Unit = {
       .na.drop("all")
   }
 
-  // ---------------------------------------------------------
-  // EDA completo
-  // ---------------------------------------------------------
-  def analisisEDA(df: DataFrame): Unit = {
-    println("\n==================== EDA: Análisis Exploratorio ====================\n")
-
-
-
-    println("📌 Valores nulos por columna:")
-    df.columns.foreach { colName =>
-      val nulls = df.filter(col(colName).isNull || col(colName) === "" || col(colName).isNaN).count()
-      println(f" - $colName%-25s : $nulls")
-    }
-    println("\n")
-
-    println("📌 Estadísticos descriptivos:")
-    df.describe().show(false)
-
-    val dup = df.count() - df.dropDuplicates().count()
-    println(s"\n📌 Filas duplicadas: $dup\n")
-
-    println("📌 Distribución de variables numéricas:")
-    df.dtypes
-      .filter(t => t._2 == "IntegerType" || t._2 == "DoubleType")
-      .foreach { case (colName, _) =>
-        println(s"\n - Distribución de $colName:")
-        df.select(colName).describe().show()
-      }
-
-    println("\n📌 Top categorías por columna categórica:")
-    df.dtypes
-      .filter(_._2 == "StringType")
-      .foreach { case (colName, _) =>
-        println(s"\n - $colName:")
-        df.groupBy(colName).count().orderBy(desc("count")).show(10, truncate = false)
-      }
-
-    println("\n==================== Fin del EDA ====================\n")
-  }
+ 
 
   // ---------------------------------------------------------
   // Mostrar tabla bonita
   // ---------------------------------------------------------
   def showTable(df: DataFrame, numRows: Int): Unit = {
-  
-  val colsBonitas = Seq(
-    "vin", "make_name", "model_name", "year", "price",
-    "mileage", "body_type", "fuel_type", "transmission_display"
-  ).filter(df.columns.contains)
-
-  df.select(colsBonitas.head, colsBonitas.tail: _*).show(numRows, truncate = 25)
- 
-}
+    val colsBonitas = Seq( "vin", "make_name", "model_name", "year", "price","mileage", "body_type", "fuel_type", "transmission_display").filter(df.columns.contains)
+    df.select(colsBonitas.head, colsBonitas.tail: _*).show(numRows, truncate = 25)
+    }
 
 }
