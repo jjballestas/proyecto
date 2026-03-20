@@ -1,0 +1,6 @@
+*.zip
+*.rar
+*used_cars_data.csv
+*.log
+*.tmp
+*.parquet
