@@ -14,46 +14,66 @@ def loadData(spark: SparkSession, path: String, filename: String): DataFrame = {
   .option("mode", "PERMISSIVE").csv(path + filename)
 }
 
-
-def analisisEDA(df: DataFrame): Unit = {
+ def analisisEDA(df: DataFrame): Unit = {
   println("\n==================== EDA: Análisis Exploratorio ====================\n")
 
+  // ---------------------------------------------------------
+  // Valores nulos por columna
+  // ---------------------------------------------------------
   println("📌 Valores nulos por columna:")
-  df.dtypes.foreach {
-    case (colName, "DoubleType") | (colName, "FloatType") =>
-      val nulls = df.filter(
-        col(colName).isNull || isnan(col(colName))
-      ).count()
-      println(f" - $colName%-25s : $nulls")
+  df.dtypes.foreach { case (colName, dataType) =>
+    val nulls =
+      if (dataType == "DoubleType" || dataType == "FloatType")
+        df.filter(col(colName).isNull || isnan(col(colName))).count()
+      else if (dataType == "StringType")
+        df.filter(col(colName).isNull || trim(col(colName)) === "").count()
+      else
+        df.filter(col(colName).isNull).count()
 
-    case (colName, "StringType") =>
-      val nulls = df.filter(
-        col(colName).isNull || trim(col(colName)) === ""
-      ).count()
-      println(f" - $colName%-25s : $nulls")
-
-    case (colName, _) =>
-      val nulls = df.filter(
-        col(colName).isNull
-      ).count()
-      println(f" - $colName%-25s : $nulls")
+    println(f" - $colName%-25s : $nulls")
   }
   println()
 
-  println("📌 Estadísticos descriptivos:")
-  df.describe().show(false)
+  // ---------------------------------------------------------
+  // Estadísticos descriptivos de variables numéricas
+  // ---------------------------------------------------------
+  println("📌 Estadísticos descriptivos (solo variables numéricas):")
 
-  val dup = df.count() - df.dropDuplicates().count()
-  println(s"\n📌 Filas duplicadas: $dup\n")
+  val numericCols = df.dtypes.filter { case (_, t) =>
+      t == "IntegerType" || t == "DoubleType" || t == "FloatType" || t == "LongType"
+    }.map(_._1)
 
+  if (numericCols.nonEmpty) {
+    df.select(numericCols.head, numericCols.tail: _*).describe().show(truncate = 20)
+  } else {
+    println("No hay columnas numéricas para describir.")
+  }
+  println()
+
+  // ---------------------------------------------------------
+  // Filas duplicadas
+  // ---------------------------------------------------------
+  val totalRows = df.count()
+  val uniqueRows = df.dropDuplicates().count()
+  val dup = totalRows - uniqueRows
+  println(s"📌 Filas totales     : $totalRows")
+  println(s"📌 Filas únicas      : $uniqueRows")
+  println(s"📌 Filas duplicadas  : $dup\n")
+
+  // ---------------------------------------------------------
+  // Distribución individual de variables numéricas
+  // ---------------------------------------------------------
   println("📌 Distribución de variables numéricas:")
-  df.dtypes
-    .filter(t => t._2 == "IntegerType" || t._2 == "DoubleType" || t._2 == "FloatType")
-    .foreach { case (colName, _) =>
+  df.dtypes.filter { case (_, dataType) =>
+      dataType == "IntegerType" || dataType == "DoubleType" || dataType == "FloatType" || dataType == "LongType"
+    }.foreach { case (colName, _) =>
       println(s"\n - Distribución de $colName:")
-      df.select(colName).describe().show()
+      df.select(colName).describe().show(truncate = 20)
     }
 
+  // ---------------------------------------------------------
+  // Top categorías en variables categóricas seleccionadas
+  // ---------------------------------------------------------
   println("\n📌 Top categorías por columna categórica:")
   val categoricasUtiles = Seq(
     "body_type",
@@ -77,8 +97,6 @@ def analisisEDA(df: DataFrame): Unit = {
 
   println("\n==================== Fin del EDA ====================\n")
 }
-
-
 def imprimirDiccionarioAnalisis(df: DataFrame): Unit = {
 
   case class InfoColumna(
