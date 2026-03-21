@@ -35,22 +35,6 @@ def loadData(spark: SparkSession, path: String, filename: String): DataFrame = {
   println()
 
   // ---------------------------------------------------------
-  // Estadísticos descriptivos de variables numéricas
-  // ---------------------------------------------------------
-  println("📌 Estadísticos descriptivos (solo variables numéricas):")
-
-  val numericCols = df.dtypes.filter { case (_, t) =>
-      t == "IntegerType" || t == "DoubleType" || t == "FloatType" || t == "LongType"
-    }.map(_._1)
-
-  if (numericCols.nonEmpty) {
-    df.select(numericCols.head, numericCols.tail: _*).describe().show(truncate = 20)
-  } else {
-    println("No hay columnas numéricas para describir.")
-  }
-  println()
-
-  // ---------------------------------------------------------
   // Filas duplicadas
   // ---------------------------------------------------------
   val totalRows = df.count()
@@ -68,11 +52,11 @@ def loadData(spark: SparkSession, path: String, filename: String): DataFrame = {
       dataType == "IntegerType" || dataType == "DoubleType" || dataType == "FloatType" || dataType == "LongType"
     }.foreach { case (colName, _) =>
       println(s"\n - Distribución de $colName:")
-      df.select(colName).describe().show(truncate = 20)
+      df.select(colName).describe().show(20, false)
     }
 
   // ---------------------------------------------------------
-  // Top categorías en variables categóricas seleccionadas
+  // Top categorías por columna categórica
   // ---------------------------------------------------------
   println("\n📌 Top categorías por columna categórica:")
   val categoricasUtiles = Seq(
@@ -92,11 +76,12 @@ def loadData(spark: SparkSession, path: String, filename: String): DataFrame = {
 
   categoricasUtiles.foreach { colName =>
     println(s"\n - $colName:")
-    df.groupBy(colName).count().orderBy(desc("count")).show(10, truncate = true)
+    df.groupBy(colName).count().orderBy(desc("count")).show(10, false)
   }
 
   println("\n==================== Fin del EDA ====================\n")
 }
+
 def imprimirDiccionarioAnalisis(df: DataFrame): Unit = {
 
   case class InfoColumna(
