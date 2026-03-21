@@ -3,12 +3,16 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 
 val PATH = "/home/usuario/regresion/proyecto/"
-val RAWDATA = "dataset/used_cars_data_1000.csv"
-val PARQUET = "dataset/Parquet/data_processed"
-val REALIZAR_EDA = true    
+val RAWDATA = "dataset/used_cars_data.csv"
 
+val RAWPARQUET = "dataset/parquet/raw_data"
+val REALIZAR_EDA = true    
+val FORCE_CREATE_PARQUET = false
 val spark = SparkSession.builder().appName("EDA Regresion").master("local[*]").getOrCreate()
-val df = Utils.loadOrProcessData( spark, PATH, RAWDATA, PARQUET, REALIZAR_EDA)
+
+val df=Utils.loadDataParquet(spark, PATH, RAWDATA, RAWPARQUET, FORCE_CREATE_PARQUET)
+
+ 
 println(s"📌 Filas: ${df.count()}  |  Columnas: ${df.columns.length}\n")
 
 println("📌 Esquema del DataFrame:")
@@ -24,4 +28,5 @@ if (REALIZAR_EDA) {
  // Utils.showTable(df, 10)
 }
  
-Utils.imprimirDiccionarioAnalisis(df)
+//Utils.imprimirDiccionarioAnalisis(df)
+Utils.runFullPriceEDA(df)
