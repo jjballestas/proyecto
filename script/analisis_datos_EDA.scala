@@ -29,4 +29,4 @@ if (REALIZAR_EDA) {
 }
  
 //Utils.imprimirDiccionarioAnalisis(df)
-Utils.runFullPriceEDA(df)
+ 
