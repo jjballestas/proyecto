@@ -770,12 +770,7 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
     // ---------------------------------------------------------
 // Añadir región geográfica fina usando latitude + longitude
 // ---------------------------------------------------------
-def addGeoRegion(
-    df: DataFrame,
-    latitudeCol: String = "latitude",
-    longitudeCol: String = "longitude",
-    regionCol: String = "geo_region"
-): DataFrame = {
+def addGeoRegion(   df: DataFrame,    latitudeCol: String = "latitude",    longitudeCol: String = "longitude",    regionCol: String = "geo_region"): DataFrame = {
   df.withColumn(
     regionCol,
     when(col(latitudeCol).isNull || col(longitudeCol).isNull, "unknown")
@@ -791,12 +786,7 @@ def addGeoRegion(
 // ---------------------------------------------------------
 // Precio por región geográfica
 // ---------------------------------------------------------
-def analyzePriceByGeoRegion(
-    df: DataFrame,
-    latitudeCol: String = "latitude",
-    longitudeCol: String = "longitude",
-    regionCol: String = "geo_region"
-): DataFrame = {
+def analyzePriceByGeoRegion(    df: DataFrame,    latitudeCol: String = "latitude",    longitudeCol: String = "longitude",    regionCol: String = "geo_region"): DataFrame = {
   val dfRegion = addGeoRegion(df, latitudeCol, longitudeCol, regionCol)
   val dfPrice = getValidNumericDF(dfRegion, "price", positiveOnly = true)
 
@@ -838,33 +828,30 @@ def haversineMiles(lat1: Column, lon1: Column, lat2: Double, lon2: Double): Colu
 def agregarFeaturesUrbanasHaversine(df: DataFrame): DataFrame = {
 
   val ciudades = Seq(
-    ("New_York", 40.7128, -74.0060),
-    ("Los_Angeles", 34.0522, -118.2437),
-    ("Chicago", 41.8781, -87.6298),
-    ("Houston", 29.7604, -95.3698),
-    ("Phoenix", 33.4484, -112.0740),
-    ("Philadelphia", 39.9526, -75.1652),
-    ("San_Antonio", 29.4241, -98.4936),
-    ("San_Diego", 32.7157, -117.1611),
-    ("Dallas", 32.7767, -96.7970),
-    ("San_Jose", 37.3382, -121.8863),
-    ("Miami", 25.7617, -80.1918),
-    ("Atlanta", 33.7490, -84.3880),
-    ("Seattle", 47.6062, -122.3321),
-    ("Denver", 39.7392, -104.9903),
-    ("Boston", 42.3601, -71.0589)
+    (40.7128, -74.0060),   // New York
+    (34.0522, -118.2437),  // Los Angeles
+    (41.8781, -87.6298),   // Chicago
+    (29.7604, -95.3698),   // Houston
+    (33.4484, -112.0740),  // Phoenix
+    (39.9526, -75.1652),   // Philadelphia
+    (29.4241, -98.4936),   // San Antonio
+    (32.7157, -117.1611),  // San Diego
+    (32.7767, -96.7970),   // Dallas
+    (37.3382, -121.8863),  // San Jose
+    (25.7617, -80.1918),   // Miami
+    (33.7490, -84.3880),   // Atlanta
+    (47.6062, -122.3321),  // Seattle
+    (39.7392, -104.9903),  // Denver
+    (42.3601, -71.0589)    // Boston
   )
 
-  val distExprs = ciudades.map { case (nombre, lat, lon) =>
-    haversineMiles(col("latitude"), col("longitude"), lat, lon).alias(s"dist_$nombre")
+  val distExprs = ciudades.map { case (lat, lon) =>
+    haversineMiles(col("latitude"), col("longitude"), lat, lon)
   }
 
-  val dfDist = df.select(col("*") +: distExprs: _*)
-  val distCols = ciudades.map { case (nombre, _, _) => col(s"dist_$nombre") }
-  val minDistExpr = least(distCols: _*)
+  val minDistExpr = least(distExprs: _*)
 
-  dfDist
-    .withColumn("dist_to_major_city_miles", minDistExpr)
+  df.withColumn("dist_to_major_city_miles", minDistExpr)
     .withColumn(
       "urban_level",
       when(col("dist_to_major_city_miles") <= 25, "urban")
@@ -872,7 +859,6 @@ def agregarFeaturesUrbanasHaversine(df: DataFrame): DataFrame = {
         .otherwise("rural")
     )
 }
-
 // ---------------------------------------------------------
 // Precio según proximidad urbana
 // ---------------------------------------------------------
@@ -905,22 +891,303 @@ def getPriceThresholds(df: DataFrame): (Double, Double) = {
   val quantiles = df.stat.approxQuantile("price", Array(0.90, 0.95), 0.01)
   (quantiles(0), quantiles(1)) // p90, p95
 }
+
+// ---------------------------------------------------------
+// Analizar contenido de columnas string antes de procesarlas
+// ---------------------------------------------------------
+def analyzeStringColumnsContent(df: DataFrame,colsToAnalyze: Seq[String],sampleTopN: Int = 20
+): Unit = {
+
+  val validCols = colsToAnalyze.filter(df.columns.contains)
+
+  validCols.foreach { c =>
+    println(s"\n==================== Análisis de: $c ====================")
+
+    val base = df.select(col(c))
+
+    val summary = base.agg(
+      count("*").alias("n_total"),
+      sum(when(col(c).isNull, 1).otherwise(0)).alias("n_null"),
+      sum(when(trim(col(c)) === "", 1).otherwise(0)).alias("n_empty"),
+      sum(when(trim(lower(col(c))).isin("null", "none", "--", "n/a", "na"), 1).otherwise(0)).alias("n_placeholder"),
+      countDistinct(col(c)).alias("n_distinct"),
+      sum(
+        when(
+          regexp_extract(col(c), "([0-9]+\\.?[0-9]*)", 1) =!= "",
+          1
+        ).otherwise(0)
+      ).alias("n_with_number")
+    )
+
+    println("---- Resumen ----")
+    summary.show(false)
+
+    println("---- Top valores más frecuentes ----")
+    base.groupBy(col(c))
+      .count()
+      .orderBy(desc("count"))
+      .show(sampleTopN, truncate = false)
+
+    println("---- Ejemplos con número extraíble ----")
+    base.filter(regexp_extract(col(c), "([0-9]+\\.?[0-9]*)", 1) =!= "")
+      .groupBy(col(c))
+      .count()
+      .orderBy(desc("count"))
+      .show(sampleTopN, truncate = false)
+
+    println("---- Ejemplos sin número extraíble ----")
+    base.filter(
+      col(c).isNotNull &&
+      trim(col(c)) =!= "" &&
+      !trim(lower(col(c))).isin("null", "none", "--", "n/a", "na") &&
+      regexp_extract(col(c), "([0-9]+\\.?[0-9]*)", 1) === ""
+    )
+      .groupBy(col(c))
+      .count()
+      .orderBy(desc("count"))
+      .show(sampleTopN, truncate = false)
+  }
+}
+
 def addGamaAlta(df: DataFrame): DataFrame = {
 
-  val (p90, p95) = getPriceThresholds(df)
+  val dfClean = df
+    .withColumn("make_name_clean", trim(lower(col("make_name"))))
+    .withColumn("body_type_clean", trim(lower(col("body_type"))))
 
-  df.withColumn("gama_alta",
+  val (p90, p95) = getPriceThresholds(dfClean.filter(col("price") > 4000))
+
+  dfClean.withColumn(
+    "gama_alta",
+    when(col("price") <= 4000, 0)
+      .when(col("price") >= p95, 1)
+      .when(
+        col("price") >= p90 &&
+        (
+          col("horsepower") > 300 ||
+          col("make_name_clean").isin(
+            "bmw", "mercedes-benz", "audi", "porsche", "lexus", "tesla",
+            "ferrari", "mclaren", "lamborghini", "bentley", "rolls-royce",
+            "aston martin", "maserati", "bugatti", "pagani", "koenigsegg"
+          ) ||
+          col("body_type_clean").isin("coupe", "convertible")
+        ),
+        1
+      )
+      .otherwise(0)
+  ).drop("make_name_clean", "body_type_clean")
+}
+
+ 
+// esta función extrae características numéricas de columnas string que contienen números mezclados con texto, 
+// como "200 hp" o "5.0 L", creando nuevas columnas numéricas y eliminando las originales para facilitar el análisis y modelado posterior
+def extractStringNumericFeatures(df: DataFrame): DataFrame = {
+
+  def extractNumber(colName: String): Column = {
+    regexp_extract(col(colName), "([0-9]+\\.?[0-9]*)", 1).cast("double")
+  }
+
+  def extractCylinders(colName: String): Column = {
+    regexp_extract(col(colName), "(\\d+)", 1).cast("double")
+  }
+
+  val df2 = df
+    .withColumn("power_num", extractNumber("power"))
+    .withColumn("torque_num", extractNumber("torque"))
+    .withColumn("engine_cylinders_num", extractCylinders("engine_cylinders"))
+    .withColumn("back_legroom_num", extractNumber("back_legroom"))
+    .withColumn("front_legroom_num", extractNumber("front_legroom"))
+    .withColumn("fuel_tank_volume_num", extractNumber("fuel_tank_volume"))
+    .withColumn("height_num", extractNumber("height"))
+    .withColumn("length_num", extractNumber("length"))
+    .withColumn("maximum_seating_num", extractNumber("maximum_seating"))
+    .withColumn("wheelbase_num", extractNumber("wheelbase"))
+    .withColumn("width_num", extractNumber("width"))
+
+  val colsToDrop = Seq(
+    "power",
+    "torque",
+    "engine_cylinders",
+    "back_legroom",
+    "front_legroom",
+    "fuel_tank_volume",
+    "height",
+    "length",
+    "maximum_seating",
+    "wheelbase",
+    "width"
+  ).filter(df2.columns.contains)
+
+  df2.drop(colsToDrop: _*)
+}
+
+def addGeographicFeatures(df: DataFrame): DataFrame = {
+
+  val df1 = addGeoRegion(df)
+  val df2 = agregarFeaturesUrbanasHaversine(df1)
+
+  val colsToDrop = Seq("latitude", "longitude").filter(df2.columns.contains)
+  df2.drop(colsToDrop: _*)
+}
+
+// ---------------------------------------------------------
+// Crear is_pickup y limpiar variables específicas de pickup
+// ---------------------------------------------------------
+
+
+def addIsPickupAndClean(df: DataFrame): DataFrame = {
+  val pickupCols = Seq("bed", "bed_height", "bed_length", "cabin")
+    .filter(df.columns.contains)
+
+  val dfWithPickup = df.withColumn(
+    "is_pickup",
+    when(col("body_type") === "Pickup Truck", 1).otherwise(0)
+  )
+
+  pickupCols.foldLeft(dfWithPickup) { (acc, c) =>
+    acc.withColumn(
+      c,
+      when(
+        col(c).isNull || trim(col(c)).isin("", "--", "NULL", "None", "null"),
+        lit(null).cast("string")
+      ).otherwise(col(c))
+    ).withColumn(
+      c,
+      when(col("is_pickup") === 1, col(c))
+        .otherwise(lit(null).cast("string"))
+    )
+  }
+}
+
+
+def fillBooleanAsCategory(df: DataFrame, cols: Seq[String]): DataFrame = {
+  val validCols = cols.filter(df.columns.contains)
+
+  validCols.foldLeft(df) { (acc, c) =>
+    acc.withColumn(
+      c,
+      when(col(c).isNull, "unknown")
+        .otherwise(col(c).cast("string"))
+    )
+  }
+}
+//esta función trata la variable owner_count, que tiene un alto porcentaje de valores nulos, 
+//creando una nueva columna que indica si el valor original estaba ausente y rellenando los nulos con -1 
+//para mantener la información de ausencia sin perder registros
+def treatOwnerCount(df: DataFrame): DataFrame = {
+  df.withColumn("owner_count_missing", col("owner_count").isNull.cast("int"))
+    .withColumn("owner_count", when(col("owner_count").isNull, -1).otherwise(col("owner_count")))
+}
+def addTemporalFeatures(df: DataFrame): DataFrame = {
+  df.withColumn("listed_year", year(col("listed_date")))
+    .withColumn("listed_month", month(col("listed_date")))
+    .withColumn("vehicle_age_at_listing", year(col("listed_date")) - col("year"))
+}
+
+def cleanFuelType(df: DataFrame): DataFrame = {
+  df.withColumn(
+    "fuel_type_clean",
+    when(lower(col("fuel_type")).contains("gas"), "gasoline")
+      .when(lower(col("fuel_type")).contains("diesel"), "diesel")
+      .when(lower(col("fuel_type")).contains("hybrid"), "hybrid")
+      .when(lower(col("fuel_type")).contains("electric"), "electric")
+      .when(lower(col("fuel_type")).contains("flex"), "flex_fuel")
+      .when(col("fuel_type").isNull, "unknown")
+      .otherwise("other")
+  ).drop("fuel_type")
+}
+def addMissingDimensionsFlag(df: DataFrame): DataFrame = {
+  df.withColumn(
+    "missing_dimensions",
     when(
-      col("price") >= p95, 1 // claramente alta gama
-    ).when(
-      col("price") >= p90 &&
-      (
-        col("horsepower") > 300 ||
-        col("make_name").isin("BMW", "Mercedes-Benz", "Audi", "Porsche", "Lexus", "Tesla") ||
-        col("body_type").isin("Coupe", "Convertible")
-      ),
+      col("height_num").isNull &&
+      col("length_num").isNull &&
+      col("width_num").isNull &&
+      col("wheelbase_num").isNull,
       1
     ).otherwise(0)
   )
 }
+def imputeDimensionsByGroup(df: DataFrame): DataFrame = {
+
+  val groupCols = Seq("body_type", "is_pickup")
+
+  val cols = Seq(
+    "height_num",
+    "length_num",
+    "width_num",
+    "wheelbase_num",
+    "maximum_seating_num"
+  )
+
+  cols.foldLeft(df) { (acc, c) =>
+    acc.withColumn(
+      c,
+      when(col(c).isNull,
+        expr(s"""
+          percentile_approx($c, 0.5)
+          OVER (PARTITION BY ${groupCols.mkString(",")})
+        """)
+      ).otherwise(col(c))
+    )
+  }
+}
+
+
+//esta función elimina columnas que se consideran irrelevantes para el modelo, 
+//ya sea por falta de información, alta cardinalidad, redundancia o baja cobertura
+def dropIrrelevantColumns(df: DataFrame): DataFrame = {
+
+  val colsToDrop = Seq(
+
+    // Variables sin información (100% nulos → no aportan varianza)
+    "combine_fuel_economy",
+    "is_certified",
+    "vehicle_damage_category","bed_height","bed_length",
+
+    // Identificadores únicos o casi únicos → no generalizan
+    "vin",
+    "listing_id",
+    "sp_id",
+
+    // Variables de tipo multimedia o texto libre no estructurado
+    // (no se utilizarán en este modelo tabular)
+    "main_picture_url",
+    "description",
+
+    // Variables duplicadas semánticamente
+    // Se mantiene la versión más compacta/estandarizada
+    "transmission_display",     // redundante con transmission
+    "wheel_system_display",     // redundante con wheel_system
+
+    // Variables con alta cardinalidad o ruido categórico
+    // sin aportar señal clara adicional frente a otras variables
+    "listing_color",
+    "dealer_zip",
+    "sp_name",
+
+    // Variables específicas de pickups con muy baja cobertura global
+    // y que no aportan suficiente señal tras la creación de is_pickup
+    "bed",
+    "cabin",
+
+    // Variables con >90% de valores nulos → muy baja capacidad predictiva
+    "is_cpo",
+    "is_oemcpo",
+
+    // Variable inconsistente como indicador de pickup
+    // (se sustituye por la feature derivada is_pickup)
+    "isCab"
+    //columnas relacionadas con potencia, torque y cilindros del motor que son string con formato inconsistente 
+    //y que se procesaron por separado para extraer su parte numérica
+    ,"power", "torque", "engine_cylinders",
+    // Variable con alto porcentaje de nulos que se habtratado y transformado en una nueva feature owner_count_missing 
+    //  por lo que se elimina la original para evitar redundancia
+    "owner_count","trimId","listed_date"
+
+  ).filter(df.columns.contains)
+
+  df.drop(colsToDrop: _*)
+}
+
 }

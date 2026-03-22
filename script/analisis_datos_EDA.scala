@@ -19,6 +19,11 @@ println("📌 Esquema del DataFrame:")
 df.printSchema()
 println("\n")
 
+ 
+/*
+Utils.analyzeStringColumnsContent(  df,  Seq("power", "torque", "engine_cylinders","back_legroom",
+"front_legroom","fuel_tank_volume","height","length","maximum_seating","wheelbase","width"))
+ 
 if (REALIZAR_EDA) {
   println("=== Análisis Exploratorio de Datos ===")
   Utils.analisisEDA(df)
@@ -27,13 +32,24 @@ if (REALIZAR_EDA) {
   println("=== Datos procesados cargados ===")
  // Utils.showTable(df, 10)
 }
+ */
+ val df2 = Utils.addIsPickupAndClean(df)
  
-val df2 = Utils.addGamaAlta(df)
+val df3 = Utils.addGamaAlta(df2)
+val df4 = Utils.addGeographicFeatures(df3)
  
-df2.groupBy("gama_alta")
-  .agg(
-    count("*").alias("n"),
-    avg("price").alias("avg_price"),
-    expr("percentile_approx(price, 0.5)").alias("median_price")
-  )
-  .show(false)
+val df5 = Utils.addIsPickupAndClean(df4)
+
+val df6 = Utils.extractStringNumericFeatures(df5) 
+
+val df7 = Utils.fillBooleanAsCategory(df6, Seq("fleet", "frame_damaged", "has_accidents", "salvage", "theft_title"))
+val df8 = Utils.treatOwnerCount(df7)
+val df9 = Utils.addTemporalFeatures(df8)
+val df10 = Utils.cleanFuelType(df9)
+val df11 = Utils.dropIrrelevantColumns(df10)
+val df12 = Utils.addMissingDimensionsFlag(df11)
+val df13 = Utils.imputeDimensionsByGroup(df12)
+println("📌 Esquema del DataFrame:")
+df13.printSchema()
+Utils.mostrarNulosPorColumna(df13 )
+ 
