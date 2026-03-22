@@ -28,5 +28,12 @@ if (REALIZAR_EDA) {
  // Utils.showTable(df, 10)
 }
  
-//Utils.imprimirDiccionarioAnalisis(df)
+val df2 = Utils.addGamaAlta(df)
  
+df2.groupBy("gama_alta")
+  .agg(
+    count("*").alias("n"),
+    avg("price").alias("avg_price"),
+    expr("percentile_approx(price, 0.5)").alias("median_price")
+  )
+  .show(false)

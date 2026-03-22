@@ -105,9 +105,21 @@ def analisisEDA(df: DataFrame): Unit = {
   Utils.showDF("Precio por year", Utils.analyzePriceByYear(df), n = 50)
   Utils.showDF("Top vehículos más caros", Utils.getTopExpensiveVehicles(df, topN = 30), n = 30)
   Utils.showDF("Top 5 precios por marca", Utils.getTopKPriceByCategory(df, "make_name", topCategories = 15, k = 5), n = 200)
-  Utils.showDF("price por geo_region", Utils.analyzeNumericByGeoRegion(df, "price", positiveOnly = true), n = 10)
+  
   Utils.showDF("Resumen para decidir transformación de price", Utils.summarizePriceTransformationDecision(df))
+val dfGeo = agregarFeaturesUrbanasHaversine(df)
 
+Utils.showDF(
+  "price por geo_region",
+  analyzePriceByGeoRegion(dfGeo),
+  n = 10
+)
+
+Utils.showDF(
+  "price por urban_level",
+  analyzePriceByUrbanProximity(dfGeo),
+  n = 10
+)
 
 
   println("\n📌 Top categorías por columna categórica:")
@@ -137,467 +149,7 @@ def analisisEDA(df: DataFrame): Unit = {
   
 }
 
- def imprimirDiccionarioAnalisis(df: DataFrame): Unit = {
-
-  case class InfoColumna(
-    significado: String,
-    analizar: String,
-    motivo: String,
-    tratamiento: String
-  )
-
-  val meta = Map(
-    "vin" -> InfoColumna(
-      "Identificador único del vehículo (VIN).",
-      "NO",
-      "Es un identificador único; sirve para control de duplicados, no para explicar el precio.",
-      "Usar para detectar duplicados y excluir del modelado."
-    ),
-    "back_legroom" -> InfoColumna(
-      "Espacio para piernas en la parte trasera.",
-      "SI",
-      "Puede reflejar tamaño y segmento del vehículo y presenta un porcentaje de nulos relativamente moderado.",
-      "Extraer valor numérico en pulgadas y revisar imputación."
-    ),
-    "bed" -> InfoColumna(
-      "Tipo o tamaño de caja de carga en pickups.",
-      "AMPLIAR",
-      "Presenta un porcentaje altísimo de nulos y solo aplica a pickups.",
-      "Mantener solo si se trabaja específicamente con pickups; en otro caso eliminar o recodificar como no aplica."
-    ),
-    "bed_height" -> InfoColumna(
-      "Altura de la caja de carga.",
-      "AMPLIAR",
-      "Tiene demasiados nulos y solo aporta información en pickups.",
-      "Extraer numérico y conservar solo si se mantiene un subanálisis específico para pickups."
-    ),
-    "bed_length" -> InfoColumna(
-      "Longitud de la caja de carga.",
-      "AMPLIAR",
-      "Tiene demasiados nulos y solo es útil en pickups.",
-      "Extraer numérico y conservar solo si aporta valor en ese segmento."
-    ),
-    "body_type" -> InfoColumna(
-      "Tipo de carrocería del vehículo.",
-      "SI",
-      "Es una de las variables estructurales más importantes y tiene muy pocos nulos.",
-      "Analizar distribución y relación con el precio; codificar como categórica."
-    ),
-    "cabin" -> InfoColumna(
-      "Tipo de cabina en pickups.",
-      "AMPLIAR",
-      "Solo aplica a ciertos vehículos y presenta una ausencia masiva.",
-      "Tratar como variable específica de pickups o eliminar en un modelado general."
-    ),
-    "city" -> InfoColumna(
-      "Ciudad donde está anunciado el vehículo.",
-      "AMPLIAR",
-      "Puede capturar diferencias regionales, pero tendrá alta cardinalidad y posible ruido.",
-      "Analizar cardinalidad; agrupar categorías frecuentes o eliminar si no aporta."
-    ),
-    "city_fuel_economy" -> InfoColumna(
-      "Consumo en ciudad.",
-      "SI",
-      "Variable técnica útil para caracterizar el vehículo y con un volumen de datos válido suficiente.",
-      "Analizar distribución, nulos y outliers; imputar si se mantiene."
-    ),
-    "combine_fuel_economy" -> InfoColumna(
-      "Consumo combinado.",
-      "NO",
-      "La columna está completamente vacía en el dataset actual.",
-      "Eliminar del análisis y del modelado."
-    ),
-    "daysonmarket" -> InfoColumna(
-      "Días que lleva publicado el anuncio.",
-      "SI",
-      "Puede relacionarse con el precio, la demanda y el ajuste comercial del vehículo.",
-      "Analizar distribución, outliers y relación con price."
-    ),
-    "dealer_zip" -> InfoColumna(
-      "Código postal del concesionario.",
-      "AMPLIAR",
-      "Es una variable geográfica, no una magnitud continua, y en el esquema real aparece como string.",
-      "Usar solo para agregación geográfica o eliminar del modelado base."
-    ),
-    "description" -> InfoColumna(
-      "Descripción libre del anuncio.",
-      "AMPLIAR",
-      "Es texto libre con potencial valor, pero no conviene incluirla en un EDA tabular base.",
-      "Excluir del modelado base y reservar para NLP o ingeniería de variables derivadas."
-    ),
-    "engine_cylinders" -> InfoColumna(
-      "Configuración del motor por cilindros.",
-      "SI",
-      "Variable mecánica relevante con pocos nulos relativos.",
-      "Normalizar etiquetas y analizar como categórica."
-    ),
-    "engine_displacement" -> InfoColumna(
-      "Cilindrada del motor.",
-      "SI",
-      "Variable técnica importante y potencialmente muy relacionada con el precio.",
-      "Analizar distribución, nulos y outliers; imputar si se mantiene."
-    ),
-    "engine_type" -> InfoColumna(
-      "Tipo o configuración del motor.",
-      "SI",
-      "Aporta información mecánica útil y puede complementar o redundar con engine_cylinders.",
-      "Analizar como categórica y revisar redundancia."
-    ),
-    "exterior_color" -> InfoColumna(
-      "Color exterior detallado.",
-      "AMPLIAR",
-      "Puede tener mucha cardinalidad y nombres comerciales muy dispersos.",
-      "Normalizar categorías o preferir listing_color para un modelado más simple."
-    ),
-    "fleet" -> InfoColumna(
-      "Indica si el vehículo perteneció a una flota.",
-      "AMPLIAR",
-      "Puede ser relevante, pero tiene un volumen muy alto de nulos.",
-      "Imputar como desconocido o evaluar eliminación según el enfoque del modelo."
-    ),
-    "frame_damaged" -> InfoColumna(
-      "Indica si el chasis está dañado.",
-      "AMPLIAR",
-      "Es relevante para el estado del vehículo, pero presenta muchos valores nulos.",
-      "Imputar como desconocido o mantener como categoría separada."
-    ),
-    "franchise_dealer" -> InfoColumna(
-      "Indica si el vendedor es concesionario oficial.",
-      "SI",
-      "No tiene nulos y puede influir en confianza, garantía y precio.",
-      "Usar como booleana."
-    ),
-    "franchise_make" -> InfoColumna(
-      "Marca asociada a la franquicia del concesionario.",
-      "AMPLIAR",
-      "Puede resultar redundante con make_name y tiene un número importante de nulos.",
-      "Revisar redundancia antes de decidir si se conserva."
-    ),
-    "front_legroom" -> InfoColumna(
-      "Espacio para piernas delantero.",
-      "SI",
-      "Puede reflejar tamaño interior y categoría del vehículo.",
-      "Extraer valor numérico en pulgadas."
-    ),
-    "fuel_tank_volume" -> InfoColumna(
-      "Capacidad del tanque de combustible.",
-      "SI",
-      "Es una variable física útil para caracterizar el vehículo.",
-      "Extraer valor numérico e imputar si procede."
-    ),
-    "fuel_type" -> InfoColumna(
-      "Tipo de combustible.",
-      "SI",
-      "Muy relevante para segmentación y precio, con distribución interpretable.",
-      "Analizar como categórica; agrupar categorías muy raras si hace falta."
-    ),
-    "has_accidents" -> InfoColumna(
-      "Indica si el vehículo tiene accidentes registrados.",
-      "AMPLIAR",
-      "Es una variable muy importante, pero con gran cantidad de nulos.",
-      "Imputar como desconocido o mantener categoría separada."
-    ),
-    "height" -> InfoColumna(
-      "Altura del vehículo.",
-      "AMPLIAR",
-      "Puede aportar valor físico, pero requiere limpieza textual.",
-      "Extraer numérico y evaluar su utilidad real."
-    ),
-    "highway_fuel_economy" -> InfoColumna(
-      "Consumo en carretera.",
-      "SI",
-      "Variable técnica relevante con volumen de datos suficiente.",
-      "Analizar distribución, nulos y outliers."
-    ),
-    "horsepower" -> InfoColumna(
-      "Potencia del motor en HP.",
-      "SI",
-      "Variable clave para prestaciones y precio.",
-      "Analizar distribución, outliers y relación con price."
-    ),
-    "interior_color" -> InfoColumna(
-      "Color interior.",
-      "AMPLIAR",
-      "Tiene nulos casi inexistentes, pero mantiene alta cardinalidad y variantes inconsistentes.",
-      "Normalizar etiquetas y agrupar categorías raras."
-    ),
-    "isCab" -> InfoColumna(
-      "Indica si fue taxi o cab.",
-      "AMPLIAR",
-      "Puede reflejar un uso intensivo, pero presenta muchos nulos.",
-      "Imputar como desconocido o evaluar si compensa conservarla."
-    ),
-    "is_certified" -> InfoColumna(
-      "Indica si el vehículo está certificado.",
-      "NO",
-      "La columna está completamente vacía en el dataset actual.",
-      "Eliminar del análisis y del modelado."
-    ),
-    "is_cpo" -> InfoColumna(
-      "Indica si es certified pre-owned por concesionario.",
-      "AMPLIAR",
-      "Puede influir en confianza y precio, pero presenta una ausencia muy alta.",
-      "Mantener solo si se decide imputar como desconocido; en otro caso evaluar eliminación."
-    ),
-    "is_new" -> InfoColumna(
-      "Indica si el vehículo es nuevo o muy reciente.",
-      "SI",
-      "No tiene nulos y puede alterar de forma importante la distribución del precio.",
-      "Usar como booleana y analizar su efecto sobre price."
-    ),
-    "is_oemcpo" -> InfoColumna(
-      "Indica si está certificado por el fabricante.",
-      "AMPLIAR",
-      "Podría ser útil, pero presenta demasiados nulos.",
-      "Imputar como desconocido o eliminar si no aporta."
-    ),
-    "latitude" -> InfoColumna(
-      "Latitud del concesionario.",
-      "AMPLIAR",
-      "Útil para información geográfica, pero no suele aportar valor directo por sí sola.",
-      "Usar junto con longitude o derivar región/estado."
-    ),
-    "length" -> InfoColumna(
-      "Longitud del vehículo.",
-      "SI",
-      "Medida física relevante para segmentación del vehículo.",
-      "Extraer valor numérico."
-    ),
-    "listed_date" -> InfoColumna(
-      "Fecha en que el anuncio fue publicado.",
-      "SI",
-      "Puede aportar estacionalidad y antigüedad del anuncio.",
-      "Derivar variables temporales como año, mes o antigüedad."
-    ),
-    "listing_color" -> InfoColumna(
-      "Grupo dominante del color exterior.",
-      "SI",
-      "Es una versión más compacta y tratable que exterior_color.",
-      "Analizar como categórica y preferirla sobre exterior_color en el modelado base."
-    ),
-    "listing_id" -> InfoColumna(
-      "Identificador único del anuncio.",
-      "NO",
-      "Es un identificador técnico.",
-      "Usar solo para control de registros; excluir del modelado."
-    ),
-    "longitude" -> InfoColumna(
-      "Longitud del concesionario.",
-      "AMPLIAR",
-      "Útil para geolocalización, pero no suele aportar señal directa por sí sola.",
-      "Usar junto con latitude o derivar región."
-    ),
-    "main_picture_url" -> InfoColumna(
-      "URL de la imagen principal del anuncio.",
-      "NO",
-      "No aporta valor en un EDA tabular ni en un modelado base.",
-      "Eliminar del análisis y del modelado."
-    ),
-    "major_options" -> InfoColumna(
-      "Listado de equipamientos u opciones principales.",
-      "AMPLIAR",
-      "Puede ser útil, pero suele venir como texto o lista compleja.",
-      "Contar opciones o extraer indicadores binarios si se decide explotar esta información."
-    ),
-    "make_name" -> InfoColumna(
-      "Marca del vehículo.",
-      "SI",
-      "Variable comercial clave con gran poder explicativo sobre el precio.",
-      "Analizar distribución y codificar como categórica."
-    ),
-    "maximum_seating" -> InfoColumna(
-      "Número máximo de plazas.",
-      "SI",
-      "Puede reflejar tamaño y tipo de vehículo.",
-      "Extraer valor numérico."
-    ),
-    "mileage" -> InfoColumna(
-      "Kilometraje del vehículo.",
-      "SI",
-      "Es una de las variables más importantes para explicar el precio.",
-      "Analizar distribución, outliers y relación con price."
-    ),
-    "model_name" -> InfoColumna(
-      "Modelo del vehículo.",
-      "SI",
-      "Variable comercial importante, aunque con alta cardinalidad.",
-      "Analizar frecuencia y valorar agrupación o recorte de cardinalidad."
-    ),
-    "owner_count" -> InfoColumna(
-      "Número de propietarios anteriores.",
-      "AMPLIAR",
-      "Puede afectar depreciación y confianza, pero presenta muchos nulos.",
-      "Imputar o tratar como discreta si se conserva."
-    ),
-    "power" -> InfoColumna(
-      "Potencia expresada en texto.",
-      "AMPLIAR",
-      "Puede duplicar información de horsepower y requiere limpieza textual.",
-      "Extraer valor numérico o eliminar si resulta redundante."
-    ),
-    "price" -> InfoColumna(
-      "Precio del vehículo.",
-      "SI",
-      "Es la variable objetivo principal del problema de regresión.",
-      "Analizar distribución, sesgo, outliers y posible log-transform."
-    ),
-    "salvage" -> InfoColumna(
-      "Indica si el vehículo tiene título salvage.",
-      "AMPLIAR",
-      "Es relevante a nivel legal y comercial, pero presenta muchos nulos.",
-      "Imputar como desconocido o evaluar conservación según la estrategia."
-    ),
-    "savings_amount" -> InfoColumna(
-      "Ahorro estimado respecto a una referencia.",
-      "AMPLIAR",
-      "Puede ser útil, pero depende fuertemente de cómo se haya calculado.",
-      "Revisar definición y posible riesgo de fuga antes de usar."
-    ),
-    "seller_rating" -> InfoColumna(
-      "Valoración del vendedor.",
-      "SI",
-      "Tiene muy pocos nulos y puede influir en confianza y precio percibido.",
-      "Analizar distribución e imputar los pocos faltantes si se mantiene."
-    ),
-    "sp_id" -> InfoColumna(
-      "Identificador del vendedor o proveedor.",
-      "NO",
-      "Es un identificador técnico aunque en el esquema aparezca como double.",
-      "Usar solo para trazabilidad y excluir del modelado."
-    ),
-    "sp_name" -> InfoColumna(
-      "Nombre del vendedor o proveedor.",
-      "AMPLIAR",
-      "Puede tener cardinalidad alta y riesgo de fuga de información.",
-      "Analizar frecuencia y decidir si agrupar o excluir."
-    ),
-    "theft_title" -> InfoColumna(
-      "Indica si el título está asociado a robo.",
-      "AMPLIAR",
-      "Es relevante a nivel legal, pero presenta un gran volumen de nulos.",
-      "Imputar como desconocido o evaluar eliminación."
-    ),
-    "torque" -> InfoColumna(
-      "Par motor.",
-      "AMPLIAR",
-      "Es útil, pero suele venir en texto y requiere parsing.",
-      "Extraer valor numérico si es viable; en caso contrario eliminar."
-    ),
-    "transmission" -> InfoColumna(
-      "Tipo de transmisión.",
-      "SI",
-      "Variable técnica y comercial importante.",
-      "Analizar como categórica."
-    ),
-    "transmission_display" -> InfoColumna(
-      "Descripción mostrada de la transmisión.",
-      "AMPLIAR",
-      "Puede ser redundante con transmission, aunque aporta mayor detalle.",
-      "Comparar ambas y conservar la más útil."
-    ),
-    "trimId" -> InfoColumna(
-      "Identificador del acabado o versión.",
-      "NO",
-      "Parece identificador técnico.",
-      "Excluir del modelado y usar solo para trazabilidad."
-    ),
-    "trim_name" -> InfoColumna(
-      "Nombre del acabado o versión.",
-      "AMPLIAR",
-      "Puede aportar detalle comercial, pero tiene cardinalidad elevada.",
-      "Analizar frecuencia y decidir si agrupar o conservar."
-    ),
-    "vehicle_damage_category" -> InfoColumna(
-      "Categoría de daño del vehículo.",
-      "NO",
-      "La columna está completamente vacía en el dataset actual.",
-      "Eliminar del análisis y del modelado."
-    ),
-    "wheel_system" -> InfoColumna(
-      "Sistema de tracción o ruedas.",
-      "SI",
-      "Variable técnica relevante para segmentación del vehículo.",
-      "Analizar como categórica."
-    ),
-    "wheel_system_display" -> InfoColumna(
-      "Descripción del sistema de tracción.",
-      "AMPLIAR",
-      "Parece muy próxima a wheel_system y puede ser redundante.",
-      "Comparar ambas y conservar la más útil."
-    ),
-    "wheelbase" -> InfoColumna(
-      "Distancia entre ejes.",
-      "SI",
-      "Medida física relevante para caracterizar el vehículo.",
-      "Extraer valor numérico."
-    ),
-    "width" -> InfoColumna(
-      "Anchura del vehículo.",
-      "SI",
-      "Medida física útil para segmentación del vehículo.",
-      "Extraer valor numérico."
-    ),
-    "year" -> InfoColumna(
-      "Año del vehículo.",
-      "SI",
-      "Variable clave para explicar depreciación y precio.",
-      "Analizar distribución y relación con price."
-    )
-  )
-
-  def wrapText(text: String, width: Int): Seq[String] = {
-    if (text == null || text.isEmpty) return Seq("")
-    val words = text.split("\\s+")
-    val lines = scala.collection.mutable.ArrayBuffer[String]()
-    var current = ""
-
-    for (word <- words) {
-      if ((current + " " + word).trim.length <= width) {
-        current = (current + " " + word).trim
-      } else {
-        lines += current
-        current = word
-      }
-    }
-    if (current.nonEmpty) lines += current
-    lines.toSeq
-  }
-
-  def printField(label: String, value: String, width: Int = 88): Unit = {
-    val wrapped = wrapText(value, width)
-    if (wrapped.nonEmpty) {
-      println(f"$label%-14s ${wrapped.head}")
-      wrapped.tail.foreach(line => println(f"${""}%-14s $line"))
-    } else {
-      println(f"$label%-14s ")
-    }
-  }
-
-  println("\n==================== ANÁLISIS DEL DATASET ====================\n")
-
-  df.dtypes.foreach { case (colName, tipoReal) =>
-    val info = meta.getOrElse(
-      colName,
-      InfoColumna(
-        "Pendiente de documentar.",
-        "AMPLIAR",
-        "No hay definición suficiente para decidir su uso.",
-        "Revisar valores reales y decidir tratamiento."
-      )
-    )
-
-    println("=" * 100)
-    printField("Columna:", colName)
-    printField("Tipo:", tipoReal)
-    printField("Significado:", info.significado)
-    printField("¿Analizar?:", info.analizar)
-    printField("Motivo:", info.motivo)
-    printField("Tratamiento:", info.tratamiento)
-  }
-
-  println("=" * 100)
-}
-
+ 
   // ---------------------------------------------------------
   // Verificar si existe archivo/carpeta
   // ---------------------------------------------------------
@@ -1214,93 +766,75 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
   ): DataFrame = {
     suspiciousDF.orderBy(desc("price")).limit(topN)
   }
-    // =========================================================
-  // REGIÓN GEOGRÁFICA FINA Y ANÁLISIS POR REGIÓN
-  // =========================================================
+    
+    // ---------------------------------------------------------
+// Añadir región geográfica fina usando latitude + longitude
+// ---------------------------------------------------------
+def addGeoRegion(
+    df: DataFrame,
+    latitudeCol: String = "latitude",
+    longitudeCol: String = "longitude",
+    regionCol: String = "geo_region"
+): DataFrame = {
+  df.withColumn(
+    regionCol,
+    when(col(latitudeCol).isNull || col(longitudeCol).isNull, "unknown")
+      .when(col(longitudeCol) < -100 && col(latitudeCol) >= 37, "west_north")
+      .when(col(longitudeCol) < -100 && col(latitudeCol) < 37, "west_south")
+      .when(col(longitudeCol) >= -100 && col(longitudeCol) < -85 && col(latitudeCol) >= 37, "central_north")
+      .when(col(longitudeCol) >= -100 && col(longitudeCol) < -85 && col(latitudeCol) < 37, "central_south")
+      .when(col(longitudeCol) >= -85 && col(latitudeCol) >= 37, "east_north")
+      .otherwise("east_south")
+  )
+}
 
-  // ---------------------------------------------------------
-  // Añadir región geográfica fina usando latitude + longitude
-  // ---------------------------------------------------------
-  def addGeoRegion(
-      df: DataFrame,
-      latitudeCol: String = "latitude",
-      longitudeCol: String = "longitude",
-      regionCol: String = "geo_region"
-  ): DataFrame = {
-    df.withColumn(
-      regionCol,
-      when(col(latitudeCol).isNull || col(longitudeCol).isNull, "unknown")
-        .when(col(longitudeCol) < -100 && col(latitudeCol) >= 37, "west_north")
-        .when(col(longitudeCol) < -100 && col(latitudeCol) < 37, "west_south")
-        .when(col(longitudeCol) >= -100 && col(longitudeCol) < -85 && col(latitudeCol) >= 37, "central_north")
-        .when(col(longitudeCol) >= -100 && col(longitudeCol) < -85 && col(latitudeCol) < 37, "central_south")
-        .when(col(longitudeCol) >= -85 && col(latitudeCol) >= 37, "east_north")
-        .otherwise("east_south")
+// ---------------------------------------------------------
+// Precio por región geográfica
+// ---------------------------------------------------------
+def analyzePriceByGeoRegion(
+    df: DataFrame,
+    latitudeCol: String = "latitude",
+    longitudeCol: String = "longitude",
+    regionCol: String = "geo_region"
+): DataFrame = {
+  val dfRegion = addGeoRegion(df, latitudeCol, longitudeCol, regionCol)
+  val dfPrice = getValidNumericDF(dfRegion, "price", positiveOnly = true)
+
+  dfPrice
+    .groupBy(regionCol)
+    .agg(
+      count("*").alias("n"),
+      min("price").alias("min_price"),
+      expr("percentile_approx(price, 0.25)").alias("p25"),
+      expr("percentile_approx(price, 0.5)").alias("median_price"),
+      expr("percentile_approx(price, 0.75)").alias("p75"),
+      expr("percentile_approx(price, 0.95)").alias("p95"),
+      max("price").alias("max_price"),
+      round(avg("price"), 2).alias("mean_price"),
+      skewness("price").alias("skew_price")
     )
-  }
+    .orderBy(desc("median_price"))
+}
 
-  // ---------------------------------------------------------
-  // esta función analiza una variable numérica por región geográfica, 
-  // devuelve estadísticas las descriptivas 
-  // ---------------------------------------------------------
-  def analyzeNumericByGeoRegion( df: DataFrame,numericCol: String,positiveOnly: Boolean = false,latitudeCol: String = "latitude",
-  longitudeCol: String = "longitude",regionCol: String = "geo_region" ): DataFrame = {
-    val dfRegion = addGeoRegion(df, latitudeCol, longitudeCol, regionCol)
-    val dfNum = getValidNumericDF(dfRegion, numericCol, positiveOnly)
-
-    dfNum.groupBy(regionCol)
-      .agg(
-        count("*").alias("n"),
-        min(numericCol).alias("min_value"),
-        expr(s"percentile_approx($numericCol, 0.25)").alias("p25"),
-        expr(s"percentile_approx($numericCol, 0.5)").alias("median_value"),
-        expr(s"percentile_approx($numericCol, 0.75)").alias("p75"),
-        expr(s"percentile_approx($numericCol, 0.95)").alias("p95"),
-        max(numericCol).alias("max_value"),
-        round(avg(numericCol), 2).alias("mean_value"),
-        skewness(numericCol).alias("skew_value")
-      )
-      .orderBy(desc("median_value"))
-  }
-
-  // ---------------------------------------------------------
-  // Analizar price por geo_region
-  // ---------------------------------------------------------
-  def analyzePriceByGeoRegion(
-      df: DataFrame,
-      priceCol: String = "price",
-      latitudeCol: String = "latitude",
-      longitudeCol: String = "longitude",
-      regionCol: String = "geo_region"
-  ): DataFrame = {
-    analyzeNumericByGeoRegion(
-      df = df,
-      numericCol = priceCol,
-      positiveOnly = true,
-      latitudeCol = latitudeCol,
-      longitudeCol = longitudeCol,
-      regionCol = regionCol
-    )
-    .withColumnRenamed("min_value", "min_price")
-    .withColumnRenamed("median_value", "median_price")
-    .withColumnRenamed("mean_value", "mean_price")
-    .withColumnRenamed("max_value", "max_price")
-    .withColumnRenamed("skew_value", "skew_price")
-  }
-
-
+// ---------------------------------------------------------
+// Distancia Haversine en millas
+// ---------------------------------------------------------
 def haversineMiles(lat1: Column, lon1: Column, lat2: Double, lon2: Double): Column = {
-  val r = 3958.8 // radio Tierra en millas
+  val r = 3958.8
 
   val dLat = radians(lit(lat2) - lat1)
   val dLon = radians(lit(lon2) - lon1)
 
   val a =
     pow(sin(dLat / 2), 2) +
-    cos(radians(lat1)) * cos(radians(lit(lat2))) * pow(sin(dLon / 2), 2)
+      cos(radians(lat1)) * cos(radians(lit(lat2))) * pow(sin(dLon / 2), 2)
 
   lit(r) * lit(2) * asin(sqrt(a))
 }
+
+// ---------------------------------------------------------
+// Añadir proximidad urbana a partir de grandes ciudades
+// ---------------------------------------------------------
 def agregarFeaturesUrbanasHaversine(df: DataFrame): DataFrame = {
 
   val ciudades = Seq(
@@ -1326,29 +860,67 @@ def agregarFeaturesUrbanasHaversine(df: DataFrame): DataFrame = {
   }
 
   val dfDist = df.select(col("*") +: distExprs: _*)
-
   val distCols = ciudades.map { case (nombre, _, _) => col(s"dist_$nombre") }
   val minDistExpr = least(distCols: _*)
 
-  val nearestCityExpr =
-    when(col("dist_New_York") === minDistExpr, "New_York")
-      .when(col("dist_Los_Angeles") === minDistExpr, "Los_Angeles")
-      .when(col("dist_Chicago") === minDistExpr, "Chicago")
-      .when(col("dist_Houston") === minDistExpr, "Houston")
-      .when(col("dist_Phoenix") === minDistExpr, "Phoenix")
-      .when(col("dist_Philadelphia") === minDistExpr, "Philadelphia")
-      .when(col("dist_San_Antonio") === minDistExpr, "San_Antonio")
-      .when(col("dist_San_Diego") === minDistExpr, "San_Diego")
-      .when(col("dist_Dallas") === minDistExpr, "Dallas")
-      .when(col("dist_San_Jose") === minDistExpr, "San_Jose")
-      .when(col("dist_Miami") === minDistExpr, "Miami")
-      .when(col("dist_Atlanta") === minDistExpr, "Atlanta")
-      .when(col("dist_Seattle") === minDistExpr, "Seattle")
-      .when(col("dist_Denver") === minDistExpr, "Denver")
-      .otherwise("Boston")
+  dfDist
+    .withColumn("dist_to_major_city_miles", minDistExpr)
+    .withColumn(
+      "urban_level",
+      when(col("dist_to_major_city_miles") <= 25, "urban")
+        .when(col("dist_to_major_city_miles") <= 100, "suburban")
+        .otherwise("rural")
+    )
+}
 
-  dfDist.withColumn("dist_to_major_city_miles", minDistExpr).withColumn("nearest_major_city", nearestCityExpr).withColumn("urban_level", 
-  when(col("dist_to_major_city_miles") <= 25, "urban").when(col("dist_to_major_city_miles") <= 100, "suburban").otherwise("rural"))
-  .withColumn("log_dist_to_major_city", log1p(col("dist_to_major_city_miles")))
+// ---------------------------------------------------------
+// Precio según proximidad urbana
+// ---------------------------------------------------------
+def analyzePriceByUrbanProximity(df: DataFrame): DataFrame = {
+  val dfPrice = getValidNumericDF(df, "price", positiveOnly = true)
+
+  dfPrice
+    .filter(col("urban_level").isNotNull)
+    .groupBy("urban_level")
+    .agg(
+      count("*").alias("n"),
+      min("price").alias("min_price"),
+      expr("percentile_approx(price, 0.25)").alias("p25"),
+      expr("percentile_approx(price, 0.5)").alias("median_price"),
+      expr("percentile_approx(price, 0.75)").alias("p75"),
+      expr("percentile_approx(price, 0.95)").alias("p95"),
+      max("price").alias("max_price"),
+      round(avg("price"), 2).alias("mean_price"),
+      skewness("price").alias("skew_price")
+    )
+    .orderBy(
+      when(col("urban_level") === "urban", 1)
+        .when(col("urban_level") === "suburban", 2)
+        .otherwise(3)
+    )
+}
+
+
+def getPriceThresholds(df: DataFrame): (Double, Double) = {
+  val quantiles = df.stat.approxQuantile("price", Array(0.90, 0.95), 0.01)
+  (quantiles(0), quantiles(1)) // p90, p95
+}
+def addGamaAlta(df: DataFrame): DataFrame = {
+
+  val (p90, p95) = getPriceThresholds(df)
+
+  df.withColumn("gama_alta",
+    when(
+      col("price") >= p95, 1 // claramente alta gama
+    ).when(
+      col("price") >= p90 &&
+      (
+        col("horsepower") > 300 ||
+        col("make_name").isin("BMW", "Mercedes-Benz", "Audi", "Porsche", "Lexus", "Tesla") ||
+        col("body_type").isin("Coupe", "Convertible")
+      ),
+      1
+    ).otherwise(0)
+  )
 }
 }
