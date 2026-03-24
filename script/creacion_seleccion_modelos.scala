@@ -8,9 +8,11 @@ val RAWDATA          = "dataset/used_cars_data.csv"
 val RAWPARQUET       = "dataset/parquet/raw_data"
 val FORCE_CREATE_PARQUET = false
 val FORCE_PREPROCESS     = false
-val FORCE_SPLIT = false  
+val FORCE_SPLIT = true  
 val trainPath = PATH + "dataset/parquet/train"
 val testPath  = PATH + "dataset/parquet/test"
+
+
 
 val spark = SparkSession.builder().appName("Modelado Regresion").master("local[*]").getOrCreate()
 spark.conf.set("spark.sql.debug.maxToStringFields", 200)
@@ -18,15 +20,22 @@ spark.conf.set("spark.sql.debug.maxToStringFields", 200)
 val dfload = Utils.cargarOPrepararDataset(spark, PATH, RAWDATA, RAWPARQUET,
 forceCreateParquet = FORCE_CREATE_PARQUET,forcePreprocess    = FORCE_PREPROCESS)
 
- Utils.mostrarResumenFinal(dfload)
-val dfFinal = Utils.crearSubconjuntoControlado(dfload,targetSize = 200000,seed = 42L,minRowsPerStratum = 500)
+val colsToDropModelo = Seq(
+  "city", "exterior_color", "interior_color", "model_name", "trim_name",
+  "listed_year", "listed_month", "is_classic"
+)
+val dfClean = Utils.dropColumns(dfload, colsToDropModelo)
+println(s"  ✅ Columnas eliminadas: ${colsToDropModelo.length} → quedan ${dfClean.columns.length}")
+
+ Utils.mostrarResumenFinal(dfClean)
+val dfFinal = Utils.crearSubconjuntoControlado(dfClean,targetSize = 200000,seed = 42L,minRowsPerStratum = 500)
 println(s"📌 Filas: ${dfFinal.count()}  |  Columnas: ${dfFinal.columns.length}\n")
   
 
 val fs        = org.apache.hadoop.fs.FileSystem.get(spark.sparkContext.hadoopConfiguration)
 val trainExiste = fs.exists(new org.apache.hadoop.fs.Path(trainPath))
 val testExiste  = fs.exists(new org.apache.hadoop.fs.Path(testPath))
-
+ 
 val (dfTrain, dfTest) = if (!FORCE_SPLIT && trainExiste && testExiste) {
   println("  ✅ Cargando train/test desde disco...")
   val tr = spark.read.parquet(trainPath)

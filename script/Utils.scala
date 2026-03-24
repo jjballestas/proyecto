@@ -1498,6 +1498,38 @@ def crearSubconjuntoControlado(
 
   result
 }
+def crearOCargarSplit(
+    spark: SparkSession,
+    df: DataFrame,
+    trainPath: String,
+    testPath: String,
+    trainExiste: Boolean,
+    testExiste: Boolean,
+    forceSplit: Boolean = false,
+    trainRatio: Double = 0.8,
+    seed: Long = 42L
+): (DataFrame, DataFrame) = {
 
+  val (dfTrain, dfTest) = if (!forceSplit && trainExiste && testExiste) {
+    println("  ✅ Cargando train/test desde disco...")
+    (spark.read.parquet(trainPath), spark.read.parquet(testPath))
+  } else {
+    println("  🔄 Generando split train/test...")
+    val Array(tr, te) = df.randomSplit(Array(trainRatio, 1 - trainRatio), seed = seed)
+    tr.write.mode("overwrite").parquet(trainPath)
+    te.write.mode("overwrite").parquet(testPath)
+    println("  ✅ Train y Test guardados en parquet")
+    (spark.read.parquet(trainPath), spark.read.parquet(testPath))
+  }
+
+  val nTrain = dfTrain.count()
+  val nTest  = dfTest.count()
+  val nTotal = nTrain + nTest
+
+  println(f"\n  📌 Train : $nTrain%,d registros (${nTrain.toDouble / nTotal * 100}%.1f%%)")
+  println(f"  📌 Test  : $nTest%,d registros (${nTest.toDouble / nTotal * 100}%.1f%%)")
+
+  (dfTrain, dfTest)
+}
 
 }
