@@ -3,6 +3,7 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.Column
 import org.apache.spark.sql.functions._
+ 
   
 
 object Utils { 
@@ -1347,4 +1348,156 @@ def imprimirEnColumnas(cols: Seq[String], colWidth: Int = 30, colsPorFila: Int =
 
   println("\n" + "=" * sepAncho + "\n")
 }
+//*******************************************************************************************
+//  FIN DE LA FASE DE PREPROCESADO COMPLETO
+//*******************************************************************************************
+
+def cargarOPrepararDataset(spark: SparkSession,path: String,rawData: String,
+rawParquet: String,forceCreateParquet: Boolean = false,forcePreprocess: Boolean = false): DataFrame = {
+
+  val fs            = org.apache.hadoop.fs.FileSystem.get(spark.sparkContext.hadoopConfiguration)
+  val finalPath     = path + "dataset/parquet/dataset_final"
+  val finalHdfsPath = new org.apache.hadoop.fs.Path(finalPath)
+
+  if (!forcePreprocess && fs.exists(finalHdfsPath)) { 
+    println(s"  ✅ Cargando dataset_final desde disco...")
+    val df = spark.read.parquet(finalPath)
+    println(s"  ✅ Dataset cargado: ${df.count()} registros | ${df.columns.length} columnas")
+    df
+
+  } else {
+     
+    if (forcePreprocess)
+      println("  🔄 forcePreprocess=true — regenerando desde raw data...")
+    else
+      println("  🔄 dataset_final no encontrado — ejecutando pipeline completo...")
+
+    val dfRaw = loadDataParquet(spark, path, rawData, rawParquet, forceCreateParquet)
+    prepararDataset(spark, dfRaw, path, forcePreprocess)
+  }
+}
+
+
+def crearSubconjuntoControlado(
+    df: DataFrame,
+    targetSize: Int = 400000,
+    seed: Long = 42L,
+    minRowsPerStratum: Int = 500
+): DataFrame = {
+
+  require(df.columns.contains("year"), "La columna 'year' es obligatoria.")
+  require(df.columns.contains("body_type"), "La columna 'body_type' es obligatoria.")
+  require(df.columns.contains("log_price"), "La columna 'log_price' es obligatoria.")
+
+  println("\n==================== SUBCONJUNTO CONTROLADO ====================\n")
+  println(s"📌 Tamaño objetivo aproximado : $targetSize")
+  println(s"📌 Seed                       : $seed")
+  println(s"📌 Mínimo por estrato         : $minRowsPerStratum")
+
+  // ---------------------------------------------------------
+  // 1. Filtro básico de seguridad
+  // ---------------------------------------------------------
+  val dfBase = df
+    .filter(col("log_price").isNotNull)
+    .filter(col("year").isNotNull)
+
+  val totalRows = dfBase.count()
+  println(s"📌 Filas válidas de entrada   : $totalRows")
+
+  if (targetSize >= totalRows) {
+    println("✅ El tamaño objetivo es mayor o igual que el dataset. Se devuelve el dataset completo.\n")
+    return dfBase
+  }
+
+  // ---------------------------------------------------------
+  // 2. Crear bins temporales y estrato
+  // ---------------------------------------------------------
+  val dfStrata = dfBase
+    .withColumn(
+      "year_bin",
+      when(col("year") >= 2019, "recent")
+        .when(col("year") >= 2014, "mid")
+        .otherwise("old")
+    )
+    .withColumn(
+      "body_type_stratum",
+      coalesce(trim(col("body_type")), lit("unknown"))
+    )
+    .withColumn(
+      "stratum",
+      concat_ws("_", col("year_bin"), col("body_type_stratum"))
+    )
+
+  // ---------------------------------------------------------
+  // 3. Recuento por estrato
+  // ---------------------------------------------------------
+  val strataCounts = dfStrata
+    .groupBy("stratum")
+    .count()
+    .cache()
+
+  val numStrata = strataCounts.count()
+  val baseFraction = targetSize.toDouble / totalRows.toDouble
+
+  println(s"📌 Número de estratos         : $numStrata")
+  println(f"📌 Fracción base              : $baseFraction%.6f")
+
+  // ---------------------------------------------------------
+  // 4. Construir fracciones por estrato
+  //    Regla:
+  //    - estratos grandes: fracción base
+  //    - estratos pequeños: intentar preservar al menos minRowsPerStratum
+  // ---------------------------------------------------------
+  val fractions: Map[String, Double] = strataCounts
+    .collect()
+    .map { row =>
+      val stratum = row.getAs[String]("stratum")
+      val count = row.getAs[Long]("count")
+
+      val fraction =
+        if (count <= minRowsPerStratum) 1.0
+        else math.min(1.0, math.max(baseFraction, minRowsPerStratum.toDouble / count.toDouble))
+
+      stratum -> fraction
+    }
+    .toMap
+
+  println(s"📌 Estratos con fracción calc.: ${fractions.size}")
+
+  // ---------------------------------------------------------
+  // 5. Muestreo estratificado
+  // ---------------------------------------------------------
+  val sampled = dfStrata
+    .stat
+    .sampleBy("stratum", fractions, seed)
+
+  val sampledCount = sampled.count()
+  println(s"📌 Filas tras sampleBy        : $sampledCount")
+
+  // ---------------------------------------------------------
+  // 6. Ajuste fino del tamaño
+  //    Si se pasa del objetivo, recorte aleatorio reproducible.
+  // ---------------------------------------------------------
+  val dfFinal =
+    if (sampledCount > targetSize) {
+      val ratio = targetSize.toDouble / sampledCount.toDouble
+      println(f"📌 Ajuste fino adicional      : ratio = $ratio%.6f")
+      sampled.sample(withReplacement = false, ratio, seed + 1L)
+    } else {
+      sampled
+    }
+
+  val result = dfFinal
+    .drop("year_bin", "body_type_stratum", "stratum")
+
+  val finalCount = result.count()
+  println(s"✅ Tamaño final aproximado    : $finalCount")
+  println("\n===============================================================\n")
+
+  strataCounts.unpersist()
+
+  result
+}
+
+
 }
