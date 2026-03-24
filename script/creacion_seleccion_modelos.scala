@@ -1,7 +1,8 @@
 :load Utils.scala
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
-
+import org.apache.spark.ml.regression.{LinearRegression, GBTRegressor, RandomForestRegressor}
+import org.apache.spark.ml.evaluation.RegressionEvaluator
   
 val spark = SparkSession.builder().appName("Modelado Regresion").master("local[*]").getOrCreate()
 spark.conf.set("spark.sql.debug.maxToStringFields", 200)
@@ -12,7 +13,7 @@ val RAWDATA              = "dataset/used_cars_data.csv"
 val RAWPARQUET           = "dataset/parquet/raw_data"
 val FORCE_CREATE_PARQUET = false
 val FORCE_PREPROCESS     = false
-val FORCE_SPLIT          = false
+val FORCE_SPLIT          = true
 val trainPath            = PATH + "dataset/parquet/train"
 val testPath             = PATH + "dataset/parquet/test"
 
@@ -36,13 +37,13 @@ val (dfTrain, dfTest) = if (!FORCE_SPLIT && trainExiste && testExiste) {
   val colsToDropModelo = Seq("city","exterior_color","interior_color",
     "model_name","trim_name","listed_year","listed_month","is_classic")
   val dfClean = Utils.dropColumns(dfload, colsToDropModelo)
-  println(s"  ✅ Columnas eliminadas: ${colsToDropModelo.length} → quedan ${dfClean.columns.length}")
+  println(s"   Columnas eliminadas: ${colsToDropModelo.length} → quedan ${dfClean.columns.length}")
 
   Utils.mostrarResumenFinal(dfClean)
 
   val dfFinal = Utils.crearSubconjuntoControlado(
-    dfClean, targetSize = 200000, seed = 42L, minRowsPerStratum = 500)
-  println(s"  📌 Filas: ${dfFinal.count()} | Columnas: ${dfFinal.columns.length}")
+    dfClean, targetSize = 500, seed = 42L, minRowsPerStratum = 50)
+  println(s"   Filas: ${dfFinal.count()} | Columnas: ${dfFinal.columns.length}")
 
   Utils.crearOCargarSplit(
     spark       = spark,
@@ -55,8 +56,8 @@ val (dfTrain, dfTest) = if (!FORCE_SPLIT && trainExiste && testExiste) {
   )
 }
 
-println(f"\n  📌 Train : ${dfTrain.count()}%,d registros")
-println(f"  📌 Test  : ${dfTest.count()}%,d registros")
+println(f"\n   Train : ${dfTrain.count()}%,d registros")
+println(f"   Test  : ${dfTest.count()}%,d registros")
 
  //Utils.mostrarResumenFinal(dfTest)
  
@@ -90,113 +91,76 @@ val numCols = Array("gama_alta","is_pickup","daysonmarket","highway_fuel_economy
   "power_density")
 
 // ── 2. Cast Boolean → Double ──────────────────────────────────
-val dfTrainCast = dfTrain
-  .withColumn("is_new",           col("is_new").cast("double"))
-  .withColumn("franchise_dealer", col("franchise_dealer").cast("double"))
+val dfTrainCast = dfTrain.withColumn("is_new",col("is_new").cast("double"))
+.withColumn("franchise_dealer", col("franchise_dealer").cast("double"))
 
-val dfTestCast = dfTest
-  .withColumn("is_new",           col("is_new").cast("double"))
-  .withColumn("franchise_dealer", col("franchise_dealer").cast("double"))
+val dfTestCast = dfTest.withColumn("is_new",col("is_new").cast("double"))
+.withColumn("franchise_dealer", col("franchise_dealer").cast("double"))
 
 val boolAsCols = Array("is_new","franchise_dealer")
 
 // ── 3. StringIndexer para cada categórica ─────────────────────
 val indexers = strCols.map { c =>
-  new StringIndexer()
-    .setInputCol(c)
-    .setOutputCol(s"${c}_idx")
-    .setHandleInvalid("keep")
+  new StringIndexer().setInputCol(c).setOutputCol(s"${c}_idx").setHandleInvalid("keep")
 }
 
 // ── 4. OneHotEncoder para todas las indexadas ─────────────────
-val encoder = new OneHotEncoder()
-  .setInputCols(strCols.map(c => s"${c}_idx"))
-  .setOutputCols(strCols.map(c => s"${c}_ohe"))
-  .setDropLast(true)
+val encoder = new OneHotEncoder().setInputCols(strCols.map(c => s"${c}_idx")).setOutputCols(strCols.map(c => s"${c}_ohe")).setDropLast(true)
 
 // ── 5. VectorAssembler — une todo ─────────────────────────────
 val allFeatureCols = strCols.map(c => s"${c}_ohe") ++ numCols ++ boolAsCols
 
-val assembler = new VectorAssembler()
-  .setInputCols(allFeatureCols)
-  .setOutputCol("features_raw")
-  .setHandleInvalid("keep")
+val assembler = new VectorAssembler().setInputCols(allFeatureCols).setOutputCol("features_raw").setHandleInvalid("keep")
 
 // ── 6. StandardScaler — necesario para Regresión Lineal ───────
-val scaler = new StandardScaler()
-  .setInputCol("features_raw")
-  .setOutputCol("features")
-  .setWithMean(true)
-  .setWithStd(true)
+val scaler = new StandardScaler().setInputCol("features_raw").setOutputCol("features").setWithMean(true).setWithStd(true)
 
 // ── 7. Etapas comunes a todos los modelos ─────────────────────
 val etapasBase = indexers ++ Array(encoder, assembler, scaler)
 
-println(s"  ✅ Pipeline base definido: ${etapasBase.length} etapas")
-println(s"  ✅ Features totales estimadas: ${strCols.length} OHE + ${numCols.length} num + ${boolAsCols.length} bool")
+println(s"   Pipeline base definido: ${etapasBase.length} etapas")
+println(s"   Features totales estimadas: ${strCols.length} OHE + ${numCols.length} num + ${boolAsCols.length} bool")
 
-
-
-
-
-import org.apache.spark.ml.regression.{LinearRegression, GBTRegressor, RandomForestRegressor}
-import org.apache.spark.ml.evaluation.RegressionEvaluator
-
+ 
 // ── Evaluador común ───────────────────────────────────────────
-val evaluator = new RegressionEvaluator()
-  .setLabelCol("log_price")
-  .setPredictionCol("prediction")
+val evaluator = new RegressionEvaluator().setLabelCol("log_price").setPredictionCol("prediction")
 
 // ── Modelo 1: Regresión Lineal con ElasticNet ─────────────────
-val lr = new LinearRegression()
-  .setLabelCol("log_price")
-  .setFeaturesCol("features")
-  .setMaxIter(100)
-  .setElasticNetParam(0.5)   // 0=Ridge, 1=Lasso, 0.5=ElasticNet
-  .setRegParam(0.01)
+val lr = new LinearRegression().setLabelCol("log_price").setFeaturesCol("features").setMaxIter(100)
+.setElasticNetParam(0.5).setRegParam(0.01)
 
-val pipelineLR = new Pipeline()
-  .setStages(etapasBase ++ Array(lr))
+val pipelineLR = new Pipeline().setStages(etapasBase ++ Array(lr))
 
 // ── Modelo 2: Gradient Boosted Trees ─────────────────────────
-val gbt = new GBTRegressor()
-  .setLabelCol("log_price")
-  .setFeaturesCol("features_raw")  // GBT no necesita scaler
-  .setMaxIter(50)
-  .setMaxDepth(5)
-  .setStepSize(0.1)
+val gbt = new GBTRegressor().setLabelCol("log_price").setFeaturesCol("features_raw").setMaxIter(50).setMaxDepth(5).setStepSize(0.1)
 
-val etapasBaseGBT = indexers ++ Array(encoder, assembler)  // sin scaler
+val etapasBaseGBT = indexers ++ Array(encoder, assembler)   
 
-val pipelineGBT = new Pipeline()
-  .setStages(etapasBaseGBT ++ Array(gbt))
+val pipelineGBT = new Pipeline().setStages(etapasBaseGBT ++ Array(gbt))
 
 // ── Modelo 3: Random Forest ───────────────────────────────────
-val rf = new RandomForestRegressor()
-  .setLabelCol("log_price")
-  .setFeaturesCol("features_raw")  // RF no necesita scaler
-  .setNumTrees(50)
-  .setMaxDepth(5)
-
-val pipelineRF = new Pipeline()
-  .setStages(etapasBaseGBT ++ Array(rf))  // reutiliza etapas sin scaler
+val rf = new RandomForestRegressor().setLabelCol("log_price").setFeaturesCol("features_raw").setNumTrees(50).setMaxDepth(5)
+ 
+val pipelineRF = new Pipeline().setStages(etapasBaseGBT ++ Array(rf))   
 
 // ── Entrenar los tres modelos ─────────────────────────────────
-println("  🔄 Entrenando Regresión Lineal...")
+println("   Entrenando Regresión Lineal...")
 val modeloLR  = pipelineLR.fit(dfTrainCast)
-println("  ✅ LR entrenado")
+println("   LR entrenado")
 
-println("  🔄 Entrenando GBT...")
+println("   Entrenando GBT...")
 val modeloGBT = pipelineGBT.fit(dfTrainCast)
-println("  ✅ GBT entrenado")
+println("   GBT entrenado")
 
-println("  🔄 Entrenando Random Forest...")
+println("   Entrenando Random Forest...")
 val modeloRF  = pipelineRF.fit(dfTrainCast)
-println("  ✅ RF entrenado")
+println("   RF entrenado")
 
-Utils.evaluarModelo("Regresión Lineal (ElasticNet)", modeloLR,  dfTrainCast, dfTestCast, evaluator)
-Utils.evaluarModelo("Gradient Boosted Trees",        modeloGBT, dfTrainCast, dfTestCast, evaluator)
-Utils.evaluarModelo("Random Forest",                 modeloRF,  dfTrainCast, dfTestCast, evaluator)
+ 
+Utils.evaluarModelo("Regresión Lineal (ElasticNet)", modeloLR,  dfTestCast, evaluator, Some(dfTrainCast))
+Utils.evaluarModelo("Gradient Boosted Trees",        modeloGBT, dfTestCast, evaluator, Some(dfTrainCast))
+Utils.evaluarModelo("Random Forest",                 modeloRF,  dfTestCast, evaluator, Some(dfTrainCast))
+
 
 
 import org.apache.spark.ml.tuning.{ParamGridBuilder, CrossValidator}
@@ -206,40 +170,40 @@ val paramGridLR = new ParamGridBuilder().addGrid(lr.regParam, Array(0.001, 0.01,
 
 val cvLR = new CrossValidator().setEstimator(pipelineLR).setEvaluator(evaluator.setMetricName("rmse")).setEstimatorParamMaps(paramGridLR).setNumFolds(5).setSeed(42)
 
-println("  🔄 Optimizando Regresión Lineal (9 combinaciones x 5 folds)...")
+println("   Optimizando Regresión Lineal (9 combinaciones x 5 folds)...")
 val modeloLROpt = cvLR.fit(dfTrainCast)
-println("  ✅ LR optimizado")
+println("   LR optimizado")
 
 // Mejores parámetros LR
 val mejoresParamsLR = modeloLROpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel].stages.last.asInstanceOf[org.apache.spark.ml.regression.LinearRegressionModel]
 
-println(f"  📌 Mejor regParam       : ${mejoresParamsLR.getRegParam}%.4f")
-println(f"  📌 Mejor elasticNetParam: ${mejoresParamsLR.getElasticNetParam}%.4f")
+println(f"   Mejor regParam       : ${mejoresParamsLR.getRegParam}%.4f")
+println(f"   Mejor elasticNetParam: ${mejoresParamsLR.getElasticNetParam}%.4f")
 
 // ── Optimización GBT ─────────────────────────────────────────
 val paramGridGBT = new ParamGridBuilder().addGrid(gbt.maxDepth,  Array(3, 5, 7)).addGrid(gbt.stepSize,  Array(0.05, 0.1, 0.2)).build()
 
 val cvGBT = new CrossValidator().setEstimator(pipelineGBT).setEvaluator(evaluator.setMetricName("rmse")).setEstimatorParamMaps(paramGridGBT).setNumFolds(5).setSeed(42)
 
-println("  🔄 Optimizando GBT (9 combinaciones x 5 folds)...")
+println("   Optimizando GBT (9 combinaciones x 5 folds)...")
 val modeloGBTOpt = cvGBT.fit(dfTrainCast)
-println("  ✅ GBT optimizado")
+println("   GBT optimizado")
 
 // Mejores parámetros GBT
 val mejoresParamsGBT = modeloGBTOpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel].stages.last.asInstanceOf[org.apache.spark.ml.regression.GBTRegressionModel]
 
-println(f"  📌 Mejor maxDepth: ${mejoresParamsGBT.getMaxDepth}")
-println(f"  📌 Mejor stepSize: ${mejoresParamsGBT.getStepSize}%.4f")
+println(f"   Mejor maxDepth: ${mejoresParamsGBT.getMaxDepth}")
+println(f"   Mejor stepSize: ${mejoresParamsGBT.getStepSize}%.4f")
 
 // ── Guardar modelos optimizados ───────────────────────────────
 val modelosPath = PATH + "modelos/"
 
-modeloLROpt.bestModel.save(modelosPath + "lr_optimizado")
-println("  ✅ LR optimizado guardado en disco")
+modeloLROpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel].write.overwrite().save(modelosPath + "lr_optimizado")
+println("   LR optimizado guardado en disco")
 
-modeloGBTOpt.bestModel.save(modelosPath + "gbt_optimizado")
-println("  ✅ GBT optimizado guardado en disco")
-
+modeloGBTOpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel].write.overwrite().save(modelosPath + "gbt_optimizado")
+println("   GBT optimizado guardado en disco")
 // ── Evaluar modelos optimizados ───────────────────────────────
-Utils.evaluarModelo("LR Optimizado",  modeloLROpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel], dfTrainCast, dfTestCast, evaluator)
-Utils.evaluarModelo("GBT Optimizado", modeloGBTOpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel], dfTrainCast, dfTestCast, evaluator)
+ 
+Utils.evaluarModelo("LR Optimizado",  modeloLROpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel], dfTestCast, evaluator, Some(dfTrainCast))
+Utils.evaluarModelo("GBT Optimizado", modeloGBTOpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel], dfTestCast, evaluator, Some(dfTrainCast))
