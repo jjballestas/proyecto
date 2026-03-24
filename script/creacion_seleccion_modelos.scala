@@ -28,21 +28,16 @@ val (dfTrain, dfTest) = if (!FORCE_SPLIT && trainExiste && testExiste) {
 
 } else {
   
-  val dfload = Utils.cargarOPrepararDataset(
-    spark, PATH, RAWDATA, RAWPARQUET,
-    forceCreateParquet = FORCE_CREATE_PARQUET,
-    forcePreprocess    = FORCE_PREPROCESS
-  )
+  val dfload = Utils.cargarOPrepararDataset(spark, PATH, RAWDATA, RAWPARQUET,forceCreateParquet = FORCE_CREATE_PARQUET,forcePreprocess= FORCE_PREPROCESS)
 
-  val colsToDropModelo = Seq("city","exterior_color","interior_color",
-    "model_name","trim_name","listed_year","listed_month","is_classic")
+  val colsToDropModelo = Seq("city","exterior_color","interior_color", "model_name","trim_name","listed_year","listed_month","is_classic")
   val dfClean = Utils.dropColumns(dfload, colsToDropModelo)
   println(s"   Columnas eliminadas: ${colsToDropModelo.length} → quedan ${dfClean.columns.length}")
 
   Utils.mostrarResumenFinal(dfClean)
 
   val dfFinal = Utils.crearSubconjuntoControlado(
-    dfClean, targetSize = 500, seed = 42L, minRowsPerStratum = 50)
+    dfClean, targetSize = 200000, seed = 42L, minRowsPerStratum = 500)
   println(s"   Filas: ${dfFinal.count()} | Columnas: ${dfFinal.columns.length}")
 
   Utils.crearOCargarSplit(
@@ -163,47 +158,105 @@ Utils.evaluarModelo("Random Forest",                 modeloRF,  dfTestCast, eval
 
 
 
-import org.apache.spark.ml.tuning.{ParamGridBuilder, CrossValidator}
-
-// ── Optimización Regresión Lineal ─────────────────────────────
-val paramGridLR = new ParamGridBuilder().addGrid(lr.regParam, Array(0.001, 0.01, 0.1)).addGrid(lr.elasticNetParam, Array(0.0, 0.5, 1.0)).build()
-
-val cvLR = new CrossValidator().setEstimator(pipelineLR).setEvaluator(evaluator.setMetricName("rmse")).setEstimatorParamMaps(paramGridLR).setNumFolds(5).setSeed(42)
-
-println("   Optimizando Regresión Lineal (9 combinaciones x 5 folds)...")
-val modeloLROpt = cvLR.fit(dfTrainCast)
-println("   LR optimizado")
-
-// Mejores parámetros LR
-val mejoresParamsLR = modeloLROpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel].stages.last.asInstanceOf[org.apache.spark.ml.regression.LinearRegressionModel]
-
-println(f"   Mejor regParam       : ${mejoresParamsLR.getRegParam}%.4f")
-println(f"   Mejor elasticNetParam: ${mejoresParamsLR.getElasticNetParam}%.4f")
-
-// ── Optimización GBT ─────────────────────────────────────────
-val paramGridGBT = new ParamGridBuilder().addGrid(gbt.maxDepth,  Array(3, 5, 7)).addGrid(gbt.stepSize,  Array(0.05, 0.1, 0.2)).build()
-
-val cvGBT = new CrossValidator().setEstimator(pipelineGBT).setEvaluator(evaluator.setMetricName("rmse")).setEstimatorParamMaps(paramGridGBT).setNumFolds(5).setSeed(42)
-
-println("   Optimizando GBT (9 combinaciones x 5 folds)...")
-val modeloGBTOpt = cvGBT.fit(dfTrainCast)
-println("   GBT optimizado")
-
-// Mejores parámetros GBT
-val mejoresParamsGBT = modeloGBTOpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel].stages.last.asInstanceOf[org.apache.spark.ml.regression.GBTRegressionModel]
-
-println(f"   Mejor maxDepth: ${mejoresParamsGBT.getMaxDepth}")
-println(f"   Mejor stepSize: ${mejoresParamsGBT.getStepSize}%.4f")
-
-// ── Guardar modelos optimizados ───────────────────────────────
-val modelosPath = PATH + "modelos/"
-
-modeloLROpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel].write.overwrite().save(modelosPath + "lr_optimizado")
-println("   LR optimizado guardado en disco")
-
-modeloGBTOpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel].write.overwrite().save(modelosPath + "gbt_optimizado")
-println("   GBT optimizado guardado en disco")
-// ── Evaluar modelos optimizados ───────────────────────────────
  
-Utils.evaluarModelo("LR Optimizado",  modeloLROpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel], dfTestCast, evaluator, Some(dfTrainCast))
-Utils.evaluarModelo("GBT Optimizado", modeloGBTOpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel], dfTestCast, evaluator, Some(dfTrainCast))
+ import org.apache.spark.ml.tuning.ParamGridBuilder
+
+val resultadosPath = PATH + "resultados/"
+
+// ══════════════════════════════════════════════════════════════
+// LR — Ronda 1
+// ══════════════════════════════════════════════════════════════
+val modeloLR_R1 = Utils.ejecutarBusquedaCV(
+  spark, "LR Ronda 1", pipelineLR,
+  new ParamGridBuilder()
+    .addGrid(lr.regParam,        Array(0.001, 0.01, 0.1))
+    .addGrid(lr.elasticNetParam, Array(0.0, 0.5, 1.0))
+    .build(),
+  dfTrainCast, evaluator, numFolds = 5,
+  resultadosPath = resultadosPath + "cv_lr_r1"
+)
+
+val bestPipelineLR_R1 = modeloLR_R1.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel]
+val mejorLR_R1        = bestPipelineLR_R1.stages.last.asInstanceOf[org.apache.spark.ml.regression.LinearRegressionModel]
+val mejorRegParam     = mejorLR_R1.getRegParam
+val mejorElastic      = mejorLR_R1.getElasticNetParam
+println(f"  📌 Mejor R1 → regParam=$mejorRegParam%.4f  elasticNet=$mejorElastic%.4f")
+
+// ── LR Ronda 2 — grid dinámico alrededor del mejor ────────────
+val modeloLROpt = Utils.ejecutarBusquedaCV(
+  spark, "LR Ronda 2", pipelineLR,
+  new ParamGridBuilder()
+    .addGrid(lr.regParam, Array(
+      math.max(0.0001, mejorRegParam / 5),
+      math.max(0.0001, mejorRegParam / 2),
+      mejorRegParam,
+      math.min(1.0, mejorRegParam * 2),
+      math.min(1.0, mejorRegParam * 5)).distinct.sorted)
+    .addGrid(lr.elasticNetParam,
+      if (mejorElastic == 0.0)      Array(0.0, 0.1, 0.3)
+      else if (mejorElastic == 1.0) Array(0.7, 0.9, 1.0)
+      else Array(
+        math.max(0.0, mejorElastic - 0.2),
+        mejorElastic,
+        math.min(1.0, mejorElastic + 0.2)))
+    .build(),
+  dfTrainCast, evaluator, numFolds = 3,
+  resultadosPath = resultadosPath + "cv_lr_r2"
+)
+
+val bestPipelineLR  = modeloLROpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel]
+val mejoresParamsLR = bestPipelineLR.stages.last.asInstanceOf[org.apache.spark.ml.regression.LinearRegressionModel]
+println(f"  📌 FINAL LR → regParam=${mejoresParamsLR.getRegParam}%.4f  elasticNet=${mejoresParamsLR.getElasticNetParam}%.4f")
+
+// ══════════════════════════════════════════════════════════════
+// GBT — Ronda 1
+// ══════════════════════════════════════════════════════════════
+val modeloGBT_R1 = Utils.ejecutarBusquedaCV(
+  spark, "GBT Ronda 1", pipelineGBT,
+  new ParamGridBuilder()
+    .addGrid(gbt.maxDepth, Array(3, 5, 7))
+    .addGrid(gbt.stepSize, Array(0.05, 0.1, 0.2))
+    .build(),
+  dfTrainCast, evaluator, numFolds = 5,
+  resultadosPath = resultadosPath + "cv_gbt_r1"
+)
+
+val bestPipelineGBT_R1 = modeloGBT_R1.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel]
+val mejorGBT_R1        = bestPipelineGBT_R1.stages.last.asInstanceOf[org.apache.spark.ml.regression.GBTRegressionModel]
+val mejorDepth         = mejorGBT_R1.getMaxDepth
+val mejorStepSize      = mejorGBT_R1.getStepSize
+println(f"  📌 Mejor R1 → maxDepth=$mejorDepth  stepSize=$mejorStepSize%.4f")
+
+// ── GBT Ronda 2 — grid dinámico alrededor del mejor ──────────
+val modeloGBTOpt = Utils.ejecutarBusquedaCV(
+  spark, "GBT Ronda 2", pipelineGBT,
+  new ParamGridBuilder()
+    .addGrid(gbt.maxDepth, Array(
+      math.max(2, mejorDepth - 1),
+      mejorDepth,
+      math.min(8, mejorDepth + 1)).distinct.sorted)
+    .addGrid(gbt.stepSize, Array(
+      math.max(0.01, mejorStepSize / 2),
+      mejorStepSize,
+      math.min(0.5,  mejorStepSize * 1.5)).distinct.sorted)
+    .addGrid(gbt.maxIter, Array(50, 100))
+    .build(),
+  dfTrainCast, evaluator, numFolds = 3,
+  resultadosPath = resultadosPath + "cv_gbt_r2"
+)
+
+val bestPipelineGBT  = modeloGBTOpt.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel]
+val mejoresParamsGBT = bestPipelineGBT.stages.last.asInstanceOf[org.apache.spark.ml.regression.GBTRegressionModel]
+println(f"  📌 FINAL GBT → maxDepth=${mejoresParamsGBT.getMaxDepth}  stepSize=${mejoresParamsGBT.getStepSize}%.4f  maxIter=${mejoresParamsGBT.getMaxIter}")
+
+// ── Guardar modelos finales ───────────────────────────────────
+val modelosPath = PATH + "modelos/"
+bestPipelineLR.write.overwrite().save(modelosPath + "lr_optimizado")
+bestPipelineGBT.write.overwrite().save(modelosPath + "gbt_optimizado")
+println("  ✅ Modelos guardados en disco")
+
+// ── Evaluación comparativa final ─────────────────────────────
+Utils.evaluarModelo("LR  Baseline",   modeloLR,        dfTestCast, evaluator, Some(dfTrainCast))
+Utils.evaluarModelo("GBT Baseline",   modeloGBT,       dfTestCast, evaluator, Some(dfTrainCast))
+Utils.evaluarModelo("LR  Optimizado", bestPipelineLR,  dfTestCast, evaluator, Some(dfTrainCast))
+Utils.evaluarModelo("GBT Optimizado", bestPipelineGBT, dfTestCast, evaluator, Some(dfTrainCast))

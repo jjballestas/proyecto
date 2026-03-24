@@ -1552,9 +1552,8 @@ evaluador: org.apache.spark.ml.evaluation.RegressionEvaluator,dfTr: Option[DataF
       val maeTrain  = evaluador.setMetricName("mae").evaluate(predTrain)
       val r2Train   = evaluador.setMetricName("r2").evaluate(predTrain)
 
-      println(s"\n  ══════════════════════════════════════════")
-      println(s"  Modelo: $nombre")
-      println(s"  ══════════════════════════════════════════")
+      
+      println(s"  Modelo: $nombre") 
       println(f"  ${"Métrica"}%-10s ${"Train"}%12s ${"Test"}%12s ${"Diferencia"}%12s")
       println(s"  " + "-" * 48)
       println(f"  ${"RMSE"}%-10s $rmseTrain%12.4f $rmseTest%12.4f ${rmseTest - rmseTrain}%12.4f")
@@ -1564,15 +1563,88 @@ evaluador: org.apache.spark.ml.evaluation.RegressionEvaluator,dfTr: Option[DataF
       println(s"  $overfitting")
 
     case None =>
-      // ── Modo solo test — evaluación final ────────────────────
-      println(s"\n  ══════════════════════════════════════════")
-      println(s"  Modelo: $nombre")
-      println(s"  ══════════════════════════════════════════")
+    
+      println(s"  Modelo: $nombre") 
       println(f"  R²   : $r2Test%.4f")
       println(f"  RMSE : $rmseTest%.4f  (error típico ≈ ${(math.exp(rmseTest) - 1) * 100}%.1f%% del precio)")
       println(f"  MAE  : $maeTest%.4f")
       println(f"  MSE  : $mseTest%.6f")
   }
+}
+
+ 
+def mostrarResultadosCV(
+    nombre: String,
+    cvModel: org.apache.spark.ml.tuning.CrossValidatorModel,
+    paramGrid: Array[org.apache.spark.ml.param.ParamMap]
+): Unit = {
+  val avg = cvModel.avgMetrics
+
+  // Limpiar parámetros: eliminar UID, formatear floats, poner en una línea
+  def limpiarParams(pm: org.apache.spark.ml.param.ParamMap): String = {
+    pm.toSeq
+      .map { pair =>
+        val nombre = pair.param.name  // solo el nombre sin UID
+        val valor  = pair.value match {
+          case d: Double => f"$d%.4f".replaceAll("\\.?0+$", "")  // quitar ceros trailing
+          case other     => other.toString
+        }
+        s"$nombre=$valor"
+      }
+      .mkString("  ")  // separar parámetros con dos espacios
+  }
+
+  println(s"\n  ══════════════════════════════════════════════════════════")
+  println(s"  RESULTADOS CV — $nombre")
+  println(s"  ══════════════════════════════════════════════════════════")
+  println(f"  ${"#"}%-4s ${"Parámetros"}%-45s ${"RMSE_CV"}%10s")
+  println("  " + "-" * 62)
+
+  paramGrid.zip(avg)
+    .sortBy(_._2)
+    .zipWithIndex
+    .foreach { case ((pm, rmse), idx) =>
+      println(f"  ${idx + 1}%-4d ${limpiarParams(pm)}%-45s $rmse%10.4f")
+    }
+
+  println(f"\n  ✅ Mejor RMSE CV : ${avg.min}%.4f")
+  println(f"  ⚠️  Peor  RMSE CV : ${avg.max}%.4f")
+  println(f"  📌 Mejora vs peor : ${avg.max - avg.min}%.4f")
+}
+
+
+
+// ── Guardar resultados CV a CSV ───────────────────────────────
+def guardarResultadosCV(spark: SparkSession,nombre: String,cvModel: org.apache.spark.ml.tuning.CrossValidatorModel,
+paramGrid: Array[org.apache.spark.ml.param.ParamMap],path: String): Unit = {
+  import spark.implicits._
+
+  val rows = paramGrid.zip(cvModel.avgMetrics).map { case (pm, rmse) =>
+      (pm.toString.replaceAll("[{}]","").trim, rmse)
+    }.toSeq
+
+  spark.createDataFrame(rows).toDF("params","rmse_cv").orderBy(col("rmse_cv").asc).coalesce(1)
+  .write.mode("overwrite").option("header","true").csv(path)
+
+  println(s"  ✅ Resultados CV $nombre guardados en: $path")
+}
+
+
+def ejecutarBusquedaCV(spark: SparkSession,nombre: String,pipeline: org.apache.spark.ml.Pipeline,
+paramGrid: Array[org.apache.spark.ml.param.ParamMap],dfTrain: DataFrame,evaluador: org.apache.spark.ml.evaluation.RegressionEvaluator,
+numFolds: Int = 5,seed: Long = 42L,resultadosPath: String): org.apache.spark.ml.tuning.CrossValidatorModel = {
+
+  val cv = new org.apache.spark.ml.tuning.CrossValidator().setEstimator(pipeline).setEvaluator(evaluador.setMetricName("rmse"))
+  .setEstimatorParamMaps(paramGrid).setNumFolds(numFolds).setSeed(seed)
+
+  println(s"\n  🔄 $nombre (${paramGrid.length} combinaciones x $numFolds folds)...")
+  val cvModel = cv.fit(dfTrain)
+  println(s"  ✅ $nombre completada")
+
+  mostrarResultadosCV(nombre, cvModel, paramGrid)
+  guardarResultadosCV(spark, nombre, cvModel, paramGrid, resultadosPath)
+
+  cvModel
 }
 
 
