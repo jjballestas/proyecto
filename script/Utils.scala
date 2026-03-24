@@ -1531,5 +1531,34 @@ def crearOCargarSplit(
 
   (dfTrain, dfTest)
 }
+def evaluarModelo(
+    nombre: String,
+    modelo: org.apache.spark.ml.PipelineModel,
+    dfTr: DataFrame,
+    dfTe: DataFrame,
+    evaluador: org.apache.spark.ml.evaluation.RegressionEvaluator
+): Unit = {
 
+  val predTrain = modelo.transform(dfTr)
+  val predTest  = modelo.transform(dfTe)
+
+  val rmseTrain = evaluador.setMetricName("rmse").evaluate(predTrain)
+  val rmseTest  = evaluador.setMetricName("rmse").evaluate(predTest)
+  val maeTrain  = evaluador.setMetricName("mae").evaluate(predTrain)
+  val maeTest   = evaluador.setMetricName("mae").evaluate(predTest)
+  val r2Train   = evaluador.setMetricName("r2").evaluate(predTrain)
+  val r2Test    = evaluador.setMetricName("r2").evaluate(predTest)
+
+  println(s"\n  ══════════════════════════════════════════")
+  println(s"  Modelo: $nombre")
+  println(s"  ══════════════════════════════════════════")
+  println(f"  ${"Métrica"}%-10s ${"Train"}%12s ${"Test"}%12s ${"Diferencia"}%12s")
+  println(s"  " + "-" * 48)
+  println(f"  ${"RMSE"}%-10s $rmseTrain%12.4f $rmseTest%12.4f ${rmseTest - rmseTrain}%12.4f")
+  println(f"  ${"MAE"}%-10s $maeTrain%12.4f $maeTest%12.4f ${maeTest - maeTrain}%12.4f")
+  println(f"  ${"R²"}%-10s $r2Train%12.4f $r2Test%12.4f ${r2Test - r2Train}%12.4f")
+
+  val overfitting = if (math.abs(r2Train - r2Test) > 0.05) "⚠️  posible overfitting" else "✅ sin overfitting"
+  println(s"  $overfitting")
+}
 }
