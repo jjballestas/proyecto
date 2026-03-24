@@ -803,7 +803,7 @@ def transformTargetToLog(df: DataFrame): DataFrame = {
 
   def getPriceThresholds(df: DataFrame): (Double, Double) = {
     val quantiles = df.stat.approxQuantile("price", Array(0.90, 0.95), 0.01)
-    (quantiles(0), quantiles(1)) // p90, p95
+    (quantiles(0), quantiles(1))  
   }
 
   // ---------------------------------------------------------
@@ -894,6 +894,20 @@ def transformTargetToLog(df: DataFrame): DataFrame = {
     )
 }
 
+def filterPriceErrors(df: DataFrame): DataFrame = {
+  val marcasMasivas = Seq("Ford","Chevrolet","Nissan","Dodge","Toyota","Honda","Hyundai","Kia","GMC","Jeep","RAM","Buick")
+
+  // p99 por marca — solo sobre marcas masivas
+  val p99PorMarca = df.filter(col("make_name").isin(marcasMasivas: _*)).groupBy("make_name").agg(expr("percentile_approx(price, 0.99) as p99_price"))
+
+  val dfFiltrado = df.join(p99PorMarca, Seq("make_name"), "left").filter(col("p99_price").isNull ||col("price") <= col("p99_price")).drop("p99_price")
+
+  val eliminadas = df.count() - dfFiltrado.count()
+  println(s"  [filterPriceErrors] registros eliminados: $eliminadas")
+
+  dfFiltrado
+}
+ 
 def treatDaysOnMarket(df: DataFrame): DataFrame = {
   val p99 = df.filter(col("daysonmarket").isNotNull).selectExpr("percentile_approx(daysonmarket, 0.99) as p99").first().getInt(0)
   println(s"  [treatDaysOnMarket] cap p99 = $p99 días")
@@ -1141,7 +1155,8 @@ def dropColumns(df: DataFrame, colsToDrop: Seq[String]): DataFrame = {
   df.drop(validCols: _*)
 }
     
-// Añadir en Utils.scala
+//esta función crea una nueva columna de densidad de potencia (horsepower por litro de desplazamiento) a partir de las columnas de potencia
+// y desplazamiento del motor.
 def addPowerDensity(df: DataFrame): DataFrame = {
   df.withColumn(
     "power_density",
@@ -1154,16 +1169,182 @@ def addPowerDensity(df: DataFrame): DataFrame = {
 }
     
   
-def filterPriceErrors(df: DataFrame): DataFrame = {
-  val marcasMasivas = Seq("Ford","Chevrolet","Nissan","Dodge","Toyota","Honda","Hyundai","Kia","GMC","Jeep","RAM","Buick")
-  // IQR upper bound = 97,510 — calculado antes
-  // Coches masivos no deberían superar ~200K salvo rarísimas excepciones
-  val capMarcasMasivas = 200000.0
-  df.filter(!col("make_name").isin(marcasMasivas: _*) ||col("price") <= capMarcasMasivas)
-}
+
 // Coches pre-1980 tienen lógica de precio diferente por su valor histórico y coleccionista, 
 // así que añadimos una flag para identificarlos y tratarlos aparte 
 def addIsClassicFlag(df: DataFrame): DataFrame = {
   df.withColumn("is_classic", when(col("year") < 1980, 1).otherwise(0))
+}
+
+
+def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreprocess: Boolean = false
+): DataFrame = {
+
+  val fs              = org.apache.hadoop.fs.FileSystem.get(spark.sparkContext.hadoopConfiguration)
+  val finalPath       = path + "dataset/parquet/dataset_final"
+  val preImputPath    = path + "dataset/parquet/pre_imputation"
+  val finalHdfsPath   = new org.apache.hadoop.fs.Path(finalPath)
+
+  // ── Si no se fuerza y existe el parquet final → carga directa ──
+  if (!forcePreprocess && fs.exists(finalHdfsPath)) {
+    println("  ✅ Cargando dataset_final existente desde disco...")
+    val dfCargado = spark.read.parquet(finalPath)
+    println(s"  ✅ Dataset cargado: ${dfCargado.count()} registros | ${dfCargado.columns.length} columnas")
+    return dfCargado
+  }
+
+  // ── Preprocesado completo ───────────────────────────────────────
+  if (forcePreprocess)
+    println("  🔄 forcePreprocess=true — regenerando dataset completo...")
+  else
+    println("  🔄 dataset_final no encontrado — ejecutando preprocesado...")
+
+  // Fase 1: limpieza y feature engineering
+  val colsToDrop = Seq("combine_fuel_economy","is_certified","vehicle_damage_category",
+    "vin","listing_id","sp_id","main_picture_url","description","transmission_display",
+    "wheel_system_display","listing_color","dealer_zip","sp_name",
+    "bed","cabin","is_cpo","is_oemcpo","isCab")
+
+  var dfWork = dropColumns(df, colsToDrop)
+  dfWork = addGamaAlta(dfWork)
+  dfWork = addIsPickupAndClean(dfWork)
+  dfWork = cleanFuelType(dfWork)
+  dfWork = extractStringNumericFeatures(dfWork)
+  dfWork = addGeographicFeatures(dfWork)
+  dfWork = addTemporalFeatures(dfWork)
+  dfWork = fillBooleanAsCategory(dfWork, Seq("fleet","frame_damaged","has_accidents","salvage","theft_title"))
+  dfWork = treatOwnerCount(dfWork)
+  dfWork = treatMileageOutliers(dfWork)
+  dfWork = treatDaysOnMarket(dfWork)
+  dfWork = treatSavingsAmount(dfWork, mode = "drop")
+
+  // Fase 2: corte de linaje
+  dfWork.write.mode("overwrite").parquet(preImputPath)
+  var dfImp = spark.read.parquet(preImputPath)
+
+  // Fase 3: imputación y features finales
+  dfImp = imputeDimensions(dfImp)
+  dfImp = imputeEngineSpecs(dfImp)
+  dfImp = imputeFuelEconomy(dfImp)
+  dfImp = imputeRemainingNumeric(dfImp)
+  dfImp = addPowerDensity(dfImp)
+  dfImp = filterPriceErrors(dfImp)
+  dfImp = addIsClassicFlag(dfImp)
+  dfImp = fillCategoricalUnknown(dfImp, Seq("interior_color","body_type","engine_type",
+    "franchise_make","transmission","trim_name","wheel_system"))
+
+  val colsToDropPost = Seq("engine_displacement","city_fuel_economy","power","torque",
+    "engine_cylinders","trimId","listed_date","bed_height","bed_length","major_options")
+  dfImp = dropColumns(dfImp, colsToDropPost)
+  dfImp = transformTargetToLog(dfImp)
+
+  // Fase 4: filtrar clásicos y persistir
+  val dfFinal = dfImp.filter(col("is_classic") === 0)
+  dfFinal.write.mode("overwrite").parquet(finalPath)
+  println(s"  ✅ Dataset final guardado: ${dfFinal.count()} registros | ${dfFinal.columns.length} columnas")
+
+  // Fase 5: eliminar pre_imputation
+  val preImputHdfsPath = new org.apache.hadoop.fs.Path(preImputPath)
+  if (fs.exists(preImputHdfsPath)) {
+    fs.delete(preImputHdfsPath, true)
+    println("  🗑  pre_imputation eliminado")
+  }
+
+  dfFinal
+}
+
+
+def mostrarResumenFinal(df: DataFrame): Unit = {
+  val total     = df.count()
+  val sepAncho  = 70
+
+  // helper: imprime una lista de nombres en columnas de ancho fijo
+def imprimirEnColumnas(cols: Seq[String], colWidth: Int = 30, colsPorFila: Int = 3): Unit = {
+  cols.grouped(colsPorFila).foreach { grupo =>
+    println("     " + grupo.map(c => c.padTo(colWidth, ' ')).mkString("  "))
+  }
+}
+
+  println("\n" + "=" * sepAncho)
+  println("  RESUMEN DATASET FINAL")
+  println("=" * sepAncho)
+
+  // ── Dimensiones ───────────────────────────────────────────
+  println(f"\n  📌 Registros : $total%,d")
+  println(f"  📌 Columnas  : ${df.columns.length}%d")
+
+  // ── Tipos de columnas ─────────────────────────────────────
+  val porTipo = df.dtypes.groupBy(_._2).mapValues(_.length)
+  println(s"\n  📌 Tipos:")
+  porTipo.toSeq.sortBy(_._1).foreach { case (tipo, n) =>
+    val tipoCorto = tipo.replace("Type", "")
+    println(f"     $tipoCorto%-15s $n%d columnas")
+  }
+
+  // ── Nulos ─────────────────────────────────────────────────
+  val nullExprs = df.dtypes.map { case (colName, dataType) =>
+    val cond = dataType match {
+      case "DoubleType" | "FloatType" => col(colName).isNull || col(colName).isNaN
+      case "StringType"               => col(colName).isNull || trim(col(colName)) === ""
+      case _                          => col(colName).isNull
+    }
+    sum(when(cond, 1).otherwise(0)).alias(colName)
+  }
+  val nullRow     = df.select(nullExprs: _*).head()
+  val colsConNull = df.columns.zipWithIndex
+    .map { case (c, i) => (c, nullRow.getLong(i)) }
+    .filter(_._2 > 0)
+
+  if (colsConNull.isEmpty)
+    println("\n  ✅ Nulls: 0 en todas las columnas")
+  else {
+    println(s"\n  ⚠️  Columnas con nulls: ${colsConNull.length}")
+    colsConNull.foreach { case (c, n) =>
+      val pct = n.toDouble / total * 100
+      println(f"     $c%-35s $n%,d ($pct%.2f%%)")
+    }
+  }
+
+  // ── Variable objetivo ─────────────────────────────────────
+  if (df.columns.contains("log_price")) {
+    val row = df.select(
+      min("log_price"), max("log_price"),
+      avg("log_price"),
+      expr("percentile_approx(log_price, 0.5)"),
+      skewness("log_price")
+    ).head()
+    println("\n  📌 Target — log_price:")
+    println(f"     min    : ${row.getDouble(0)}%.4f")
+    println(f"     max    : ${row.getDouble(1)}%.4f")
+    println(f"     media  : ${row.getDouble(2)}%.4f")
+    println(f"     mediana: ${row.getDouble(3)}%.4f")
+    println(f"     skew   : ${row.getDouble(4)}%.4f")
+  }
+
+  // ── Columnas categóricas ──────────────────────────────────
+  val catCols = df.dtypes.filter(_._2 == "StringType").map(_._1).sorted
+  println(s"\n  📌 Variables categóricas (${catCols.length}):")
+  println("     " + "-" * (sepAncho - 5))
+  imprimirEnColumnas(catCols, colWidth = 25, colsPorFila = 3)
+
+  // ── Columnas numéricas — separadas por grupo ──────────────
+  val numCols = df.dtypes
+    .filter { case (_, t) => t == "DoubleType" || t == "IntegerType" || t == "FloatType" }
+    .map(_._1)
+    .filterNot(_ == "log_price")
+
+  // Separar por sufijo para agrupar visualmente
+  val missingCols  = numCols.filter(_.endsWith("_missing")).sorted
+  val featureCols  = numCols.filterNot(_.endsWith("_missing")).sorted
+
+  println(s"\n  📌 Variables numéricas — features (${featureCols.length}):")
+  println("     " + "-" * (sepAncho - 5))
+  imprimirEnColumnas(featureCols, colWidth = 28, colsPorFila = 3)
+
+  println(s"\n  📌 Variables numéricas — flags missing (${missingCols.length}):")
+  println("     " + "-" * (sepAncho - 5))
+  imprimirEnColumnas(missingCols, colWidth = 32, colsPorFila = 2)
+
+  println("\n" + "=" * sepAncho + "\n")
 }
 }
