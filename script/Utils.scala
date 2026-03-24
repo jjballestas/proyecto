@@ -187,9 +187,11 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
     println("  Valores nulos por columna:")
     mostrarNulosPorColumna(df)
     println()
-  
+   
     println("  Resumen de variables numéricas:")
     resumenNumericoTabular(df)
+
+
     println("ANALISIS DE LA VARIABLE OBJETIVO PRICE:")
     Utils.showDF("Resumen global de price", Utils.analyzePriceGlobalStats(df))
     Utils.showDF("Percentiles de price", Utils.analyzePricePercentiles(df))
@@ -197,16 +199,51 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
     Utils.showDF("Precio por is_new", Utils.analyzePriceByCategory(df, "is_new"))
     Utils.showDF("Precio por body_type", Utils.analyzePriceByCategory(df, "body_type", topN = 10))
     Utils.showDF("Precio por make_name", Utils.analyzePriceByTopCategories(df, "make_name", topCategories = 10))
-    Utils.showDF("Precio por year", Utils.analyzePriceByYear(df), n = 50)
-    Utils.showDF("Top vehículos más caros", Utils.getTopExpensiveVehicles(df, topN = 30), n = 30)
-    Utils.showDF("Top 5 precios por marca", Utils.getTopKPriceByCategory(df, "make_name", topCategories = 15, k = 5), n = 200)
+    Utils.showDF("Precio por year", Utils.analyzePriceByYear(df), n = 20)
+    Utils.showDF("Top vehículos más caros", Utils.getTopExpensiveVehicles(df, topN = 30), n = 10)
+    Utils.showDF("Top 5 precios por marca", Utils.getTopKPriceByCategory(df, "make_name", topCategories = 15, k = 5), n = 50)
     
     val dfGeo = agregarFeaturesUrbanasHaversine(df)
     Utils.showDF("price por geo_region",analyzePriceByGeoRegion(dfGeo),n = 10)
     Utils.showDF("price por urban_level",analyzePriceByUrbanProximity(dfGeo),n = 10)
+    println("ANALISIS DE OUTLIERS EN PRICE:")
+    Utils.showDF("Identificar errores de datos vs precios reales de lujo",
+    Utils.getGlobalIQROutlierBounds(df, "price", positiveOnly = true).withColumnRenamed("median", "median_price"))
+
+
     Utils.showDF("Resumen para decidir transformación de price", Utils.summarizePriceTransformationDecision(df))
 
-    println("\n  Top categorías por columna categórica:")
+ 
+    println("ANALISIS DE LA VARIABLE MILEAGE:") 
+    
+    Utils.showDF("mileage stats",   Utils.analyzeNumericGlobalStats(df, "mileage"))
+   Utils.showDF("mileage pctiles",Utils.analyzeNumericPercentiles(df,"mileage",
+        positiveOnly = true,probs = Seq(0.25, 0.50, 0.75, 0.95, 0.99, 0.995, 0.999)))
+
+     
+    Utils.showDF("mileage por is_new", Utils.getNumericSegmentStats(df, "mileage", Seq("is_new")))
+
+    println("ANALISIS DE LA VARIABLE DAYSONMARKET:")  
+    Utils.showDF("dom stats",   Utils.analyzeNumericGlobalStats(df, "daysonmarket"))
+ 
+    Utils.showDF("dom pctiles",Utils.analyzeNumericPercentiles(df,"daysonmarket",
+        positiveOnly = true,probs = Seq(0.25, 0.50, 0.75, 0.95, 0.99, 0.995, 0.999)))
+    Utils.showDF("dom por body_type", Utils.getNumericSegmentStats(df, "daysonmarket", Seq("body_type")))
+
+     println("ANALISIS DE CORRELACION:")  
+ 
+    Utils.analyzeCorrelationWithPrice(df)
+
+    val corrEngine = df.stat.corr("horsepower", "engine_displacement")
+    val corrFuel = df.stat.corr("city_fuel_economy", "highway_fuel_economy")
+    println(f"  Correlación entre horsepower y engine_displacement: $corrEngine%.4f")
+    println(f"  Correlación entre city_fuel_economy y highway_fuel_economy: $corrFuel%.4f")
+    println("\n")
+    println("ANALISIS DE VARIABLES CATEGÓRICAS:")
+    Utils.analyzeStringColumnsContent(  df,  Seq("power", "torque", "engine_cylinders","back_legroom",
+    "front_legroom","fuel_tank_volume","height","length","maximum_seating","wheelbase","width"))
+    
+    println("\n TOP CATEGORIAS POR COLUMNA CATEGORICA:")
     val categoricasUtiles = Seq("body_type","fuel_type","make_name","model_name","transmission","transmission_display",
     "wheel_system","wheel_system_display","listing_color","exterior_color","interior_color","trim_name"
     ).filter(df.columns.contains)
@@ -219,14 +256,66 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
     
   }
 
- 
- 
-  def preprocesadoBasico(df: DataFrame): DataFrame = {
-    df.filter(col("price") > 0).withColumn("log_price", log(col("price"))).na.drop("all")
-  }
+//esta función analiza la correlación entre variables numéricas y la variable objetivo "price", 
+//calcula el coeficiente de correlación de Pearson para cada variable numérica en relación con "price".
+ def analyzeCorrelationWithPrice(df: DataFrame,targetCol: String = "price",excludeCols: Seq[String] = Seq()
+): Unit = {
 
   
-  //esta función filtra un DataFrame para obtener solo filas donde la columna numérica especificada no es nula, y opcionalmente solo valores positivos.
+  val numCols = df.dtypes.filter { case (name, dtype) =>
+      dtype == "DoubleType"  ||
+      dtype == "FloatType"   ||
+      dtype == "IntegerType" ||
+      dtype == "LongType"
+    }.map(_._1).filterNot(c => c == targetCol || excludeCols.contains(c))
+    val corrExprs = numCols.map { c =>
+    corr(col(c), col(targetCol)).alias(c)
+  }
+
+  val corrRow = df.filter(col(targetCol).isNotNull).select(corrExprs: _*).head()
+  
+  val results = numCols.map { c =>
+    val idx   = corrRow.fieldIndex(c)
+    val value = if (corrRow.isNullAt(idx)) Double.NaN else corrRow.getDouble(idx)
+    (c, value)
+  }.sortBy { case (_, v) => -math.abs(v) }
+
+  // Imprimir tabla
+  val sep = "+" + "-" * 32 + "+" + "-" * 12 + "+" + "-" * 18 + "+"
+  println(s"\n  Correlación de variables numéricas con '$targetCol':")
+  println(sep)
+  println(f"| ${"Variable"}%-30s | ${"Corr"}%10s | ${"Interpretación"}%-16s |")
+  println(sep)
+
+  results.foreach { case (colName, v) =>
+    val bar = {
+      val filled = math.round(math.abs(v) * 10).toInt
+      val sign   = if (v >= 0) "▲" else "▼"
+      sign + "█" * filled + "░" * (10 - filled)
+    }
+    val label = math.abs(v) match {
+      case x if x.isNaN  => "sin datos"
+      case x if x >= 0.6 => "fuerte"
+      case x if x >= 0.3 => "moderada"
+      case x if x >= 0.1 => "débil"
+      case _             => "nula"
+    }
+    println(f"| $colName%-30s | ${v}%+10.4f | $bar $label%-6s |")
+  }
+
+  println(sep)
+  println("  ▲ positiva  ▼ negativa  █ intensidad  (ordenado por |corr| desc)\n")
+}
+ 
+//esta función transforma la variable objetivo "price" aplicando el logaritmo natural,
+// creando una nueva columna "log_price" y eliminando la columna original "price".
+def transformTargetToLog(df: DataFrame): DataFrame = {
+  df.withColumn("log_price", log(col("price"))).drop("price")    
+}
+
+  
+  //esta función filtra un DataFrame para obtener solo filas donde la columna numérica especificada no es nula,
+  // y opcionalmente solo valores positivos.
   def getValidNumericDF(df: DataFrame,numericCol: String,positiveOnly: Boolean = false): DataFrame = {
     val base = df.filter(col(numericCol).isNotNull)
 
@@ -234,13 +323,10 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
     else base
   }
 
-  // ---------------------------------------------------------
-  // Resumen global de una variable numérica
-  // ---------------------------------------------------------
-  def analyzeNumericGlobalStats(
-      df: DataFrame,
-      numericCol: String,
-      positiveOnly: Boolean = false
+ 
+ //esta función calcula las estadísticas de una variable numérica específica, 
+ //como conteo, mínimo, máximo, media, mediana, desviación estándar, asimetría y curtosis.
+  def analyzeNumericGlobalStats(df: DataFrame,numericCol: String,positiveOnly: Boolean = false
   ): DataFrame = {
     val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
 
@@ -256,15 +342,10 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
     )
   }
 
-  // ---------------------------------------------------------
-  // Percentiles de una variable numérica
-  // ---------------------------------------------------------
-  def analyzeNumericPercentiles(
-      df: DataFrame,
-      numericCol: String,
-      positiveOnly: Boolean = false,
-      probs: Seq[Double] = Seq(0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99, 0.995, 0.999)
-  ): DataFrame = {
+  //esta función calcula los percentiles de una variable numérica específica,
+  // permitiendo filtrar solo valores positivos y especificar los percentiles deseados.
+  def analyzeNumericPercentiles(df: DataFrame,numericCol: String,positiveOnly: Boolean = false,
+  probs: Seq[Double] = Seq(0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99, 0.995, 0.999)): DataFrame = {
     val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
     val probsStr = probs.mkString(", ")
 
@@ -288,7 +369,7 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
     )
   }
 
- //esta función obtiene los registros con los valores más altos de una variable numérica específica,
+ //esta función obtiene los registros con los valores más altos de una variable numérica ,
  // filtrando solo valores positivos, y permite incluir columnas adicionales para contexto.
   def getTopExtremeValues(df: DataFrame,numericCol: String,positiveOnly: Boolean = false,topN: Int = 30,extraCols: Seq[String] = Seq()
   ): DataFrame = {
@@ -298,7 +379,7 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
     dfNum.select(selectedCols.map(col): _*).orderBy(desc(numericCol)).limit(topN)
   }
 
-  //esta función calcula los límites de outliers basados en el rango intercuartílico (IQR) para una variable numérica específica.
+  //esta función calcula los límites de outliers basados en el rango intercuartílico (IQR) para una variable numérica .
   def getGlobalIQROutlierBounds(df: DataFrame,numericCol: String,positiveOnly: Boolean = false): DataFrame = {
     val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
 
@@ -314,7 +395,7 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
     .withColumn("upper_bound_iqr_3_0", col("q3") + lit(3.0) * col("iqr"))
   }
 
-//esta función calcula estadísticas descriptivas de una variable numérica segmentada por una o más columnas categóricas,
+//esta función calcula estadísticas de una variable numérica segmentada por una o más columnas categóricas,
   def getNumericSegmentStats(df: DataFrame,numericCol: String,segmentCols: Seq[String],positiveOnly: Boolean = false,minGroupSize: Int = 30
   ): DataFrame = {
     val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
@@ -340,10 +421,7 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
       .filter(col("group_n") >= minGroupSize)
   }
 
-  // ---------------------------------------------------------
-  // Detectar outliers sospechosos de una variable numérica por segmento
-  // No elimina; solo devuelve registros sospechosos
-  // ---------------------------------------------------------
+//esta función identifica outliers sospechosos en una variable numérica específica, segmentada por una o más columnas categóricas,  utilizando límites basados en el rango intercuartílico (IQR) y permitiendo filtrar solo valores positivos y establecer un valor mínimo absoluto para considerar un outlier como sospechoso.
   def detectSuspiciousNumericOutliersBySegment(
       df: DataFrame,
       numericCol: String,
@@ -481,15 +559,9 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
   ): DataFrame = {
     val dfPrice = getValidPriceDF(df, priceCol)
 
-    val topCats = dfPrice.groupBy(categoryCol)
-      .count()
-      .orderBy(desc("count"))
-      .limit(topCategories)
-      .select(categoryCol)
+    val topCats = dfPrice.groupBy(categoryCol).count().orderBy(desc("count")).limit(topCategories).select(categoryCol)
 
-    dfPrice.join(topCats, Seq(categoryCol))
-      .groupBy(categoryCol)
-      .agg(
+    dfPrice.join(topCats, Seq(categoryCol)).groupBy(categoryCol).agg(
         count("*").alias("n"),
         min(priceCol).alias("min_price"),
         expr(s"percentile_approx($priceCol, 0.25)").alias("p25"),
@@ -498,8 +570,7 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
         expr(s"percentile_approx($priceCol, 0.95)").alias("p95"),
         max(priceCol).alias("max_price"),
         avg(priceCol).alias("mean_price")
-      )
-      .orderBy(desc("median_price"))
+      ).orderBy(desc("median_price"))
   }
 
   def analyzePriceByYear(df: DataFrame, priceCol: String = "price"): DataFrame = {
@@ -555,11 +626,7 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
     .withColumnRenamed("percentiles", "price_percentiles")
   }
 
-  def getGlobalPriceIQRBounds(df: DataFrame, priceCol: String = "price"): DataFrame = {
-    getGlobalIQROutlierBounds(df, priceCol, positiveOnly = true)
-      .withColumnRenamed("median", "median_price")
-  }
-
+ 
   def getPriceSegmentStats(df: DataFrame,segmentCols: Seq[String],priceCol: String = "price",minGroupSize: Int = 30): DataFrame = {
     getNumericSegmentStats(
       df = df,
@@ -638,7 +705,8 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
   // ---------------------------------------------------------
   // Precio por región geográfica
   // ---------------------------------------------------------
-  def analyzePriceByGeoRegion(    df: DataFrame,    latitudeCol: String = "latitude",    longitudeCol: String = "longitude",    regionCol: String = "geo_region"): DataFrame = {
+  def analyzePriceByGeoRegion(    df: DataFrame,    latitudeCol: String = "latitude",    
+  longitudeCol: String = "longitude",    regionCol: String = "geo_region"): DataFrame = {
     val dfRegion = addGeoRegion(df, latitudeCol, longitudeCol, regionCol)
     val dfPrice = getValidNumericDF(dfRegion, "price", positiveOnly = true)
 
@@ -717,10 +785,7 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
   def analyzePriceByUrbanProximity(df: DataFrame): DataFrame = {
     val dfPrice = getValidNumericDF(df, "price", positiveOnly = true)
 
-    dfPrice
-      .filter(col("urban_level").isNotNull)
-      .groupBy("urban_level")
-      .agg(
+    dfPrice.filter(col("urban_level").isNotNull).groupBy("urban_level").agg(
         count("*").alias("n"),
         min("price").alias("min_price"),
         expr("percentile_approx(price, 0.25)").alias("p25"),
@@ -730,11 +795,8 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
         max("price").alias("max_price"),
         round(avg("price"), 2).alias("mean_price"),
         skewness("price").alias("skew_price")
-      )
-      .orderBy(
-        when(col("urban_level") === "urban", 1)
-          .when(col("urban_level") === "suburban", 2)
-          .otherwise(3)
+      ).orderBy(
+        when(col("urban_level") === "urban", 1).when(col("urban_level") === "suburban", 2).otherwise(3)
       )
   }
 
@@ -775,17 +837,11 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
       summary.show(false)
 
       println("---- Top valores más frecuentes ----")
-      base.groupBy(col(c))
-        .count()
-        .orderBy(desc("count"))
-        .show(sampleTopN, truncate = false)
+      base.groupBy(col(c)).count().orderBy(desc("count")).show(sampleTopN, truncate = false)
 
       println("---- Ejemplos con número extraíble ----")
-      base.filter(regexp_extract(col(c), "([0-9]+\\.?[0-9]*)", 1) =!= "")
-        .groupBy(col(c))
-        .count()
-        .orderBy(desc("count"))
-        .show(sampleTopN, truncate = false)
+      base.filter(regexp_extract(col(c), "([0-9]+\\.?[0-9]*)", 1) =!= "").groupBy(col(c)).count()
+      .orderBy(desc("count")).show(sampleTopN, truncate = false)
 
       println("---- Ejemplos sin número extraíble ----")
       base.filter(
@@ -793,11 +849,7 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
         trim(col(c)) =!= "" &&
         !trim(lower(col(c))).isin("null", "none", "--", "n/a", "na") &&
         regexp_extract(col(c), "([0-9]+\\.?[0-9]*)", 1) === ""
-      )
-        .groupBy(col(c))
-        .count()
-        .orderBy(desc("count"))
-        .show(sampleTopN, truncate = false)
+      ).groupBy(col(c)).count().orderBy(desc("count")).show(sampleTopN, truncate = false)
     }
   }
 
@@ -830,7 +882,34 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
     ).drop("make_name_clean", "body_type_clean")
   }
 
-  
+  def treatMileageOutliers(df: DataFrame): DataFrame = {
+  val sentinel = 99000000.0
+  val capUsados = df.filter(col("is_new") === false && col("mileage").isNotNull && col("mileage") < sentinel)
+    .selectExpr("percentile_approx(mileage, 0.99) as p99").first().getDouble(0)
+
+  println(f"  [treatMileageOutliers] cap is_new=false: $capUsados%.0f mi")
+
+  df.withColumn("mileage",when(col("is_new") === true && col("mileage") > 500,
+        lit(null).cast("double")).when(col("is_new") === false && col("mileage") > capUsados,lit(capUsados)).otherwise(col("mileage"))
+    )
+}
+
+def treatDaysOnMarket(df: DataFrame): DataFrame = {
+  val p99 = df.filter(col("daysonmarket").isNotNull).selectExpr("percentile_approx(daysonmarket, 0.99) as p99").first().getInt(0)
+  println(s"  [treatDaysOnMarket] cap p99 = $p99 días")
+  df.withColumn("daysonmarket",when(col("daysonmarket") > p99, p99).otherwise(col("daysonmarket")))
+}
+
+def treatSavingsAmount(df: DataFrame, mode: String = "binary"): DataFrame =
+  mode match {
+    case "drop"   => df.drop("savings_amount")
+    case "binary" =>
+      df.withColumn("has_savings",when(col("savings_amount") > 0, 1).otherwise(0)).drop("savings_amount")
+    case "keep_both" =>
+      df.withColumn("has_savings",when(col("savings_amount") > 0, 1).otherwise(0))
+    case _ => df
+  }
+
   // esta función extrae características numéricas de columnas string que contienen números mezclados con texto, 
   // como "200 hp" o "5.0 L", creando nuevas columnas numéricas y eliminando las originales para facilitar el análisis y modelado posterior
   def extractStringNumericFeatures(df: DataFrame): DataFrame = {
@@ -949,14 +1028,7 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
     ).drop("fuel_type")
   }
 
-
-
-
-
-
-
-
-
+ 
   def addMissingDimensionsFlag(df: DataFrame): DataFrame = {
     df.withColumn(
       "missing_dimensions",
@@ -979,11 +1051,7 @@ def loadDataParquet( spark: SparkSession,basepath: String,rawFile: String,parque
   }
 
 
-def imputeNumericBlockByGroupWithGlobalFallback(
-    df: DataFrame,
-    colsToImpute: Seq[String],
-    groupCols: Seq[String]
-): DataFrame = {
+def imputeNumericBlockByGroupWithGlobalFallback(df: DataFrame,colsToImpute: Seq[String],groupCols: Seq[String]): DataFrame = {
 
   val validGroupCols = groupCols.filter(df.columns.contains)
   val validCols = colsToImpute.filter(df.columns.contains)
@@ -997,18 +1065,13 @@ def imputeNumericBlockByGroupWithGlobalFallback(
     expr(s"percentile_approx($c, 0.5)").alias(s"${c}_group_median")
   }
 
-  val groupedMedians = df
-    .groupBy(validGroupCols.map(col): _*)
-    .agg(aggExprs.head, aggExprs.tail: _*)
+  val groupedMedians = df.groupBy(validGroupCols.map(col): _*).agg(aggExprs.head, aggExprs.tail: _*)
 
   val joined = df.join(groupedMedians, validGroupCols, "left")
 
   val imputed = validCols.foldLeft(joined) { (acc, c) =>
-    acc.withColumn(
-      c,
-      when(col(c).isNull && col(s"${c}_group_median").isNotNull, col(s"${c}_group_median"))
-        .when(col(c).isNull, lit(globalMedians(c)))
-        .otherwise(col(c))
+    acc.withColumn(c,when(col(c).isNull && col(s"${c}_group_median").isNotNull, col(s"${c}_group_median"))
+    .when(col(c).isNull, lit(globalMedians(c))).otherwise(col(c))
     )
   }
 
@@ -1069,10 +1132,7 @@ def fillCategoricalUnknown(df: DataFrame, cols: Seq[String]): DataFrame = {
   val validCols = cols.filter(df.columns.contains)
 
   validCols.foldLeft(df) { (acc, c) =>
-    acc.withColumn(
-      c,
-      when(col(c).isNull, "unknown").otherwise(col(c))
-    )
+    acc.withColumn(c,when(col(c).isNull, "unknown").otherwise(col(c)))
   }
 }
 
@@ -1080,8 +1140,30 @@ def dropColumns(df: DataFrame, colsToDrop: Seq[String]): DataFrame = {
   val validCols = colsToDrop.filter(df.columns.contains)
   df.drop(validCols: _*)
 }
-    //esta función elimina columnas que se consideran irrelevantes para el modelo, 
-    //ya sea por falta de información, alta cardinalidad, redundancia o baja cobertura
     
+// Añadir en Utils.scala
+def addPowerDensity(df: DataFrame): DataFrame = {
+  df.withColumn(
+    "power_density",
+    when(
+      col("engine_displacement").isNotNull && col("engine_displacement") > 0 &&
+      col("horsepower").isNotNull,
+      col("horsepower") / col("engine_displacement")
+    ).otherwise(lit(null).cast("double"))
+  )
+}
     
+  
+def filterPriceErrors(df: DataFrame): DataFrame = {
+  val marcasMasivas = Seq("Ford","Chevrolet","Nissan","Dodge","Toyota","Honda","Hyundai","Kia","GMC","Jeep","RAM","Buick")
+  // IQR upper bound = 97,510 — calculado antes
+  // Coches masivos no deberían superar ~200K salvo rarísimas excepciones
+  val capMarcasMasivas = 200000.0
+  df.filter(!col("make_name").isin(marcasMasivas: _*) ||col("price") <= capMarcasMasivas)
+}
+// Coches pre-1980 tienen lógica de precio diferente por su valor histórico y coleccionista, 
+// así que añadimos una flag para identificarlos y tratarlos aparte 
+def addIsClassicFlag(df: DataFrame): DataFrame = {
+  df.withColumn("is_classic", when(col("year") < 1980, 1).otherwise(0))
+}
 }
