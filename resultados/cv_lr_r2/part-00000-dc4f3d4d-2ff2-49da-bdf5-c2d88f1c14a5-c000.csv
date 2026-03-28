@@ -1,0 +1,31 @@
+params,rmse_cv
+"linReg_fa84e68cadc8-elasticNetParam: 0.0,
+	linReg_fa84e68cadc8-regParam: 2.0E-4",0.18545719401783223
+"linReg_fa84e68cadc8-elasticNetParam: 0.0,
+	linReg_fa84e68cadc8-regParam: 5.0E-4",0.18548422497027708
+"linReg_fa84e68cadc8-elasticNetParam: 0.0,
+	linReg_fa84e68cadc8-regParam: 0.001",0.1855514518120979
+"linReg_fa84e68cadc8-elasticNetParam: 0.0,
+	linReg_fa84e68cadc8-regParam: 0.002",0.1856948187240345
+"linReg_fa84e68cadc8-elasticNetParam: 0.1,
+	linReg_fa84e68cadc8-regParam: 2.0E-4",0.18596888338764664
+"linReg_fa84e68cadc8-elasticNetParam: 0.0,
+	linReg_fa84e68cadc8-regParam: 0.005",0.18602616443703135
+"linReg_fa84e68cadc8-elasticNetParam: 0.1,
+	linReg_fa84e68cadc8-regParam: 5.0E-4",0.1860293791520199
+"linReg_fa84e68cadc8-elasticNetParam: 0.3,
+	linReg_fa84e68cadc8-regParam: 5.0E-4",0.1860616988307547
+"linReg_fa84e68cadc8-elasticNetParam: 0.1,
+	linReg_fa84e68cadc8-regParam: 0.001",0.18607920105195763
+"linReg_fa84e68cadc8-elasticNetParam: 0.3,
+	linReg_fa84e68cadc8-regParam: 2.0E-4",0.18609390472432294
+"linReg_fa84e68cadc8-elasticNetParam: 0.1,
+	linReg_fa84e68cadc8-regParam: 0.002",0.1861779276202655
+"linReg_fa84e68cadc8-elasticNetParam: 0.3,
+	linReg_fa84e68cadc8-regParam: 0.001",0.18633187183392888
+"linReg_fa84e68cadc8-elasticNetParam: 0.1,
+	linReg_fa84e68cadc8-regParam: 0.005",0.1867434298466066
+"linReg_fa84e68cadc8-elasticNetParam: 0.3,
+	linReg_fa84e68cadc8-regParam: 0.002",0.18680428328797485
+"linReg_fa84e68cadc8-elasticNetParam: 0.3,
+	linReg_fa84e68cadc8-regParam: 0.005",0.18795598261841473

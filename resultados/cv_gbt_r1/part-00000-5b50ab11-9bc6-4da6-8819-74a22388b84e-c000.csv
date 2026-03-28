@@ -1,0 +1,19 @@
+params,rmse_cv
+"gbtr_9a61f853b585-maxDepth: 7,
+	gbtr_9a61f853b585-stepSize: 0.2",0.147760223298882
+"gbtr_9a61f853b585-maxDepth: 7,
+	gbtr_9a61f853b585-stepSize: 0.1",0.15857945990533379
+"gbtr_9a61f853b585-maxDepth: 5,
+	gbtr_9a61f853b585-stepSize: 0.2",0.1593339509923995
+"gbtr_9a61f853b585-maxDepth: 7,
+	gbtr_9a61f853b585-stepSize: 0.05",0.17323500632575306
+"gbtr_9a61f853b585-maxDepth: 5,
+	gbtr_9a61f853b585-stepSize: 0.1",0.17668423492818877
+"gbtr_9a61f853b585-maxDepth: 3,
+	gbtr_9a61f853b585-stepSize: 0.2",0.1808177835681724
+"gbtr_9a61f853b585-maxDepth: 5,
+	gbtr_9a61f853b585-stepSize: 0.05",0.19468561026755768
+"gbtr_9a61f853b585-maxDepth: 3,
+	gbtr_9a61f853b585-stepSize: 0.1",0.20607729549580708
+"gbtr_9a61f853b585-maxDepth: 3,
+	gbtr_9a61f853b585-stepSize: 0.05",0.23191901713750798

@@ -163,15 +163,12 @@ Utils.evaluarModelo("Random Forest",                 modeloRF,  dfTestCast, eval
 
 val resultadosPath = PATH + "resultados/"
 
-// ══════════════════════════════════════════════════════════════
+ 
 // LR — Ronda 1
-// ══════════════════════════════════════════════════════════════
+ 
 val modeloLR_R1 = Utils.ejecutarBusquedaCV(
   spark, "LR Ronda 1", pipelineLR,
-  new ParamGridBuilder()
-    .addGrid(lr.regParam,        Array(0.001, 0.01, 0.1))
-    .addGrid(lr.elasticNetParam, Array(0.0, 0.5, 1.0))
-    .build(),
+  new ParamGridBuilder().addGrid(lr.regParam,Array(0.001, 0.01, 0.1)).addGrid(lr.elasticNetParam, Array(0.0, 0.5, 1.0)).build(),
   dfTrainCast, evaluator, numFolds = 5,
   resultadosPath = resultadosPath + "cv_lr_r1"
 )
@@ -185,14 +182,8 @@ println(f"  📌 Mejor R1 → regParam=$mejorRegParam%.4f  elasticNet=$mejorElas
 // ── LR Ronda 2 — grid dinámico alrededor del mejor ────────────
 val modeloLROpt = Utils.ejecutarBusquedaCV(
   spark, "LR Ronda 2", pipelineLR,
-  new ParamGridBuilder()
-    .addGrid(lr.regParam, Array(
-      math.max(0.0001, mejorRegParam / 5),
-      math.max(0.0001, mejorRegParam / 2),
-      mejorRegParam,
-      math.min(1.0, mejorRegParam * 2),
-      math.min(1.0, mejorRegParam * 5)).distinct.sorted)
-    .addGrid(lr.elasticNetParam,
+  new ParamGridBuilder().addGrid(lr.regParam, Array(math.max(0.0001, mejorRegParam / 5),math.max(0.0001, mejorRegParam / 2),
+      mejorRegParam,math.min(1.0, mejorRegParam * 2),math.min(1.0, mejorRegParam * 5)).distinct.sorted).addGrid(lr.elasticNetParam,
       if (mejorElastic == 0.0)      Array(0.0, 0.1, 0.3)
       else if (mejorElastic == 1.0) Array(0.7, 0.9, 1.0)
       else Array(
@@ -208,15 +199,12 @@ val bestPipelineLR  = modeloLROpt.bestModel.asInstanceOf[org.apache.spark.ml.Pip
 val mejoresParamsLR = bestPipelineLR.stages.last.asInstanceOf[org.apache.spark.ml.regression.LinearRegressionModel]
 println(f"  📌 FINAL LR → regParam=${mejoresParamsLR.getRegParam}%.4f  elasticNet=${mejoresParamsLR.getElasticNetParam}%.4f")
 
-// ══════════════════════════════════════════════════════════════
+// 
 // GBT — Ronda 1
-// ══════════════════════════════════════════════════════════════
+// 
 val modeloGBT_R1 = Utils.ejecutarBusquedaCV(
   spark, "GBT Ronda 1", pipelineGBT,
-  new ParamGridBuilder()
-    .addGrid(gbt.maxDepth, Array(3, 5, 7))
-    .addGrid(gbt.stepSize, Array(0.05, 0.1, 0.2))
-    .build(),
+  new ParamGridBuilder().addGrid(gbt.maxDepth, Array(3, 5, 7)).addGrid(gbt.stepSize, Array(0.05, 0.1, 0.2)).build(),
   dfTrainCast, evaluator, numFolds = 5,
   resultadosPath = resultadosPath + "cv_gbt_r1"
 )
