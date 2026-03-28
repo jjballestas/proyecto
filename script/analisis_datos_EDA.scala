@@ -1,4 +1,4 @@
-:load Utils.scala
+:load edaUtils.scala
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 spark.conf.set("spark.sql.debug.maxToStringFields", 200)
@@ -11,44 +11,7 @@ val FORCE_CREATE_PARQUET = false
 val FORCE_PREPROCESS =false
 val spark = SparkSession.builder().appName("EDA Regresion").master("local[*]").getOrCreate()
 
- def analisisEDA(df: DataFrame): Unit = {
-    println("\n==================== EDA: Análisis Exploratorio ====================\n") 
-    /*
-    Utils.mostrarNulosPorColumna(df)
-    println()
-    println("  Resumen de variables numéricas:\n")
-      
-    Utils.resumenNumericoTabular(df)
-    val categoricas = Seq("body_type","fuel_type","transmission","make_name","model_name","exterior_color",
-    "interior_color","wheel_system")
-
-     
-    Utils.resumenCategoricoTabular(df, categoricas)
-    
-    val booleanas = Seq("fleet","frame_damaged","franchise_dealer","has_accidents","isCab","is_cpo","is_new","is_oemcpo","salvage","theft_title")
-
-    println("\n  Resumen de variables booleanas:\n")
-    Utils.resumenBooleanasTabular(df, booleanas)
-    
-    val textoNoEstructurado = Seq("description", "major_options")
-    Utils.resumenTextoTabular(df, textoNoEstructurado)
-
-    val malTipadas = Seq("engine_cylinders","power","torque","back_legroom","fuel_tank_volume","width","height")
-    Utils.resumenMalTipadasTabular(df, malTipadas)
-
-    val identificadoras = Seq("vin", "listing_id", "sp_id")
-    Utils.resumenIdentificadoresTabular(df, identificadoras)
- 
-
-    val columnasString = df.schema.fields.filter(_.dataType.simpleString == "string").map(_.name).toSeq
-    val candidatos = Utils.detectarParesRedundantesPorNombre(columnasString)
-
-    Utils.validarParesRedundantes(df, candidatos)
-*/
-    Utils.resumenGeografico(df)
- 
-
-
+/*
     println("ANALISIS DE LA VARIABLE OBJETIVO PRICE:")
     Utils.showDF("Resumen global de price", Utils.analyzePriceGlobalStats(df)) 
     Utils.showDF("Percentiles de price", Utils.analyzePricePercentiles(df))
@@ -147,8 +110,8 @@ val spark = SparkSession.builder().appName("EDA Regresion").master("local[*]").g
     }
 
     
-
-  }
+*/
+   
 
 println("[EDA] Cargando dataset completo desde CSV o  parquet ...")
 val dfcarsdataFull=Utils.loadDataParquet(spark, PATH, RAWDATA, RAWPARQUET, FORCE_CREATE_PARQUET)
@@ -167,15 +130,16 @@ println("\n")
 if (REALIZAR_EDA) {
   
 
-  analisisEDA(dfcarsdataFull)
+  edaUtils.analisisEDA(dfcarsdataFull)
   //Utils.showTable(dfcarsdataFull, 10)
 } else {
   println("=== Datos procesados cargados ===")
    Utils.showTable(dfcarsdataFull, 10)
 }
  
-
+/*
 val dfFinal =  Utils.prepararDataset(spark, dfcarsdataFull, PATH, FORCE_PREPROCESS)
  println(s"[EDA] Tratados: ${nFilasOriginal - dfFinal.count()}")
 Utils.mostrarResumenFinal(dfFinal)
+*/
  
