@@ -1789,9 +1789,16 @@
           }
         }
 
+
+
+
+
+
+
+
     def analisisEDA(df: DataFrame): Unit = {
       println("\n==================== EDA: Análisis Exploratorio ====================\n") 
-
+      
       mostrarNulosPorColumna(df)
  
       println("\n  Resumen de variables numéricas:\n")
@@ -1826,6 +1833,99 @@
       resumenTemporalTabular(df= df,listedDateCol  = "listed_date",yearCol= "year",daysOnMarketCol = "daysonmarket",nEjemplos= 10)
       
       analizarGruposFuncionales(df)
+       
+      println("ANALISIS DE LA VARIABLE OBJETIVO PRICE:")
+      showDF("Resumen global de price", analyzePriceGlobalStats(df)) 
+      showDF("Percentiles de price", analyzePricePercentiles(df))
+      showDF("Comparación price vs log(price)", analyzePriceVsLogPrice(df))
+      showDF("Resumen para decidir transformación de price", summarizePriceTransformationDecision(df))
+
+        
+      showDF("Precio por is_new", analyzePriceByCategory(df, "is_new"))
+      showDF("Precio por body_type", analyzePriceByCategory(df, "body_type", topN = 10))
+      showDF("Precio por make_name", analyzePriceByTopCategories(df, "make_name", topCategories = 10))
+      showDF("Precio por fuel_type", analyzePriceByTopCategories(df, "fuel_type", topCategories = 10))
+
+
+
+      showDF("Precio por year", analyzePriceByYear(df), n = 20)
+      showDF("Top vehículos más caros", getTopExpensiveVehicles(df, topN = 30), n = 10)
+      showDF("Top 5 precios por marca", getTopKPriceByCategory(df, "make_name", topCategories = 15, k = 5), n = 50)
+
+      val dfGeo = agregarFeaturesUrbanasHaversine(df)
+      showDF("price por geo_region", analyzePriceByGeoRegion(dfGeo), n = 10)
+      showDF("price por urban_level", analyzePriceByUrbanProximity(dfGeo), n = 10)
+
+
+      println("ANALISIS DE OUTLIERS EN PRICE:")
+
+        // 1) Límites globales de outliers para price
+       showDF("Límites globales IQR para price",getGlobalIQROutlierBounds(df, "price", positiveOnly = true)
+        .withColumnRenamed("median", "median_price"),n = 1)
+
+        // 2) Estadísticas segmentadas por marca
+        showDF("Comportamiento del precio dentro de cada marca,",getNumericSegmentStats(df,numericCol = "price"
+        ,segmentCols = Seq("make_name"),positiveOnly = true,minGroupSize = 100).orderBy(desc("median_value")),n = 20)
+
+        // 3) Detección de outliers sospechosos dentro de cada marca
+        val suspiciousPriceByMake = detectSuspiciousNumericOutliersBySegment(df,numericCol = "price"
+        ,segmentCols = Seq("make_name"),positiveOnly = true,minGroupSize = 100,iqrMultiplier = 3.0,minAbsoluteValue = 4000.0,
+        extraCols = Seq("year", "model_name", "trim_name", "mileage", "horsepower", "body_type"))
+
+        showDF("Outliers sospechosos de price por marca",suspiciousPriceByMake,n = 20)
+
+        // 4) Resumen de outliers sospechosos por marca
+        showDF("Resumen de outliers sospechosos de price por marca",
+        summarizeSuspiciousNumericOutliers(suspiciousPriceByMake,numericCol = "price",segmentCols = Seq("make_name")),n = 20)
+      
+        showDF(  "Top mileage positivos",  getTopExtremeValues(df, "price",topN = 20, 
+        positiveOnly = true, extraCols = Seq("make_name", "model_name", "year", "mileage", "body_type")))
+       
+
+     
+    
+        println("ANALISIS DE LA VARIABLE MILEAGE:") 
+        
+        showDF("mileage stats",   analyzeNumericGlobalStats(df, "mileage"))
+
+        showDF("mileage pctiles", analyzeNumericPercentiles(df,"mileage",positiveOnly = true,
+        probs = Seq(0.25, 0.50, 0.75, 0.95, 0.99, 0.995, 0.999)))
+        
+        showDF("mileage por is_new", getNumericSegmentStats(df, "mileage", Seq("is_new")))
+
+        println("ANALISIS DE LA VARIABLE DAYSONMARKET:")  
+
+        showDF("dom stats",   analyzeNumericGlobalStats(df, "daysonmarket"))
+        
+        showDF("dom por body_type", getNumericSegmentStats(df, "daysonmarket", Seq("body_type")))
+        
+        println("ANALISIS DE CORRELACION:")  
+        
+        analyzeCorrelationWithPrice(df)
+
+        val corrEngine = df.stat.corr("horsepower", "engine_displacement")
+        val corrFuel = df.stat.corr("city_fuel_economy", "highway_fuel_economy")
+        
+        println(f"  Correlación entre horsepower y engine_displacement: $corrEngine%.4f")
+        println(f"  Correlación entre city_fuel_economy y highway_fuel_economy: $corrFuel%.4f")
+         
+
+        println("\n ANALISIS DE VARIABLES CATEGÓRICAS:")
+        analyzeStringColumnsContent(  df,  Seq("power", "torque", "engine_cylinders","back_legroom",
+        "front_legroom","fuel_tank_volume","height","length","maximum_seating","wheelbase","width"))
+        
+        println("\n TOP CATEGORIAS POR COLUMNA CATEGORICA:")
+        val categoricasUtiles = Seq("body_type","fuel_type","make_name","model_name","transmission","transmission_display",
+        "wheel_system","wheel_system_display","listing_color","exterior_color","interior_color","trim_name"
+        ).filter(df.columns.contains)
+
+        categoricasUtiles.foreach { colName =>
+          println(s"\n - $colName:")
+          df.groupBy(colName).count().orderBy(desc("count")).show(10, false)
+        }
+
+
+
     }
 
         

@@ -34,16 +34,9 @@ val testExiste  = fs.exists(new org.apache.hadoop.fs.Path(testPath))
 val (dfTrain, dfTest) = if (!FORCE_SPLIT && trainExiste && testExiste) {
   (spark.read.parquet(trainPath), spark.read.parquet(testPath))
 } else {
-  val dfload = cargarOPrepararDataset(
-    spark, PATH, RAWDATA, RAWPARQUET,
-    forceCreateParquet = FORCE_CREATE_PARQUET,
-    forcePreprocess    = FORCE_PREPROCESS
-  )
+  val dfload = cargarOPrepararDataset(spark, PATH, RAWDATA, RAWPARQUET, FORCE_CREATE_PARQUET, FORCE_PREPROCESS)
 
-  val colsToDropModelo = Seq(
-    "city", "exterior_color", "interior_color",
-    "model_name", "trim_name", "listed_year", "listed_month", "is_classic"
-  )
+  val colsToDropModelo = Seq("city", "exterior_color", "interior_color", "model_name", "trim_name")
 
   val dfClean = dropColumns(dfload, colsToDropModelo)
   println(s"   Columnas eliminadas: ${colsToDropModelo.length} → quedan ${dfClean.columns.length}")
@@ -136,7 +129,10 @@ println(s"   Pipeline ARB : ${etapasArb.length} etapas (sin scaler)")
 println(s"   Features estimadas: ${strCols.length} OHE + ${numCols.length} num + ${boolAsCols.length} bool")
 
 // ── 4.5 Definición de modelos ─────────────────────────────────
-val lr = new LinearRegression().setLabelCol("log_price").setFeaturesCol("features").setMaxIter(100).setElasticNetParam(0).setRegParam(0.1)
+//se define el modelo de regresión lineal con ElasticNet,maximo 100 iteraciones,
+// un parámetro de regularización de 0.01 y un valor de ElasticNet de 0.5. Además, se definen 
+//el modelo de Gradient Boosted Trees y el modelo de Random Forest, con sus respectivas configuraciones iniciales.
+val lr = new LinearRegression().setLabelCol("log_price").setFeaturesCol("features").setMaxIter(100).setElasticNetParam(0.5).setRegParam(0.01)
 
 val gbt = new GBTRegressor().setLabelCol("log_price").setFeaturesCol("features_raw").setMaxIter(100).setMaxDepth(2).setStepSize(0.1)
 
@@ -312,13 +308,13 @@ println("\n" + "═" * 60)
 println("  COMPARATIVA FINAL — TEST SET")
 println("═" * 60)
 
-evaluarModelo("LR  Ronda 1 (baseline)",modeloLR_R1.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel],dfTestCast, evaluator, Some(dfTrainCast))
+Utils_models.evaluarModelo("LR  Ronda 1 (baseline)",modeloLR_R1.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel],dfTestCast, evaluator, Some(dfTrainCast))
 
-evaluarModelo("LR  Optimizado",bestPipelineLR,dfTestCast, evaluator, Some(dfTrainCast))
+Utils_models.evaluarModelo("LR  Optimizado",bestPipelineLR,dfTestCast, evaluator, Some(dfTrainCast))
 
-evaluarModelo("GBT Ronda 1 (baseline)", modeloGBT_R1.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel], dfTestCast, evaluator, Some(dfTrainCast))
-evaluarModelo("GBT Optimizado", bestPipelineGBT, dfTestCast, evaluator, Some(dfTrainCast))
+Utils_models.evaluarModelo("GBT Ronda 1 (baseline)", modeloGBT_R1.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel], dfTestCast, evaluator, Some(dfTrainCast))
+Utils_models.evaluarModelo("GBT Optimizado", bestPipelineGBT, dfTestCast, evaluator, Some(dfTrainCast))
 
-evaluarModelo("RF  Ronda 1 (baseline)", modeloRF_R1.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel], dfTestCast, evaluator, Some(dfTrainCast))
+Utils_models.evaluarModelo("RF  Ronda 1 (baseline)", modeloRF_R1.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel], dfTestCast, evaluator, Some(dfTrainCast))
 
-evaluarModelo("RF  Optimizado",bestPipelineRF, dfTestCast, evaluator, Some(dfTrainCast))
+Utils_models.evaluarModelo("RF  Optimizado",bestPipelineRF, dfTestCast, evaluator, Some(dfTrainCast))

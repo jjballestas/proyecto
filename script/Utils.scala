@@ -7,7 +7,7 @@ import org.apache.log4j.{Level, Logger}
 import scala.util.Try 
 import scala.collection.immutable.ListMap
 import org.apache.spark.sql.types._
-
+import org.apache.spark.storage.StorageLevel
 Logger.getLogger("org").setLevel(Level.ERROR)
 Logger.getLogger("akka").setLevel(Level.ERROR)
 Logger.getLogger("org.apache.spark.scheduler.DAGScheduler").setLevel(Level.ERROR)
@@ -497,7 +497,7 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
   val preImputPath    = path + "dataset/parquet/pre_imputation"
   val finalHdfsPath   = new org.apache.hadoop.fs.Path(finalPath)
 
-  // ── Si no se fuerza y existe el parquet final → carga directa ──
+ // Si el dataset final ya existe y no se fuerza el preprocesado, lo cargamos para ahorrar tiempo
   if (!forcePreprocess && fs.exists(finalHdfsPath)) {
     println("  ✅ Cargando dataset_final existente desde disco...")
     val dfCargado = spark.read.parquet(finalPath)
@@ -505,7 +505,8 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
     return dfCargado
   }
 
-  // ── Preprocesado completo ───────────────────────────────────────
+  // cuando no existe el dataset final o se fuerza el preprocesado, 
+  //ejecutamos todas las fases de limpieza, feature engineering e imputación
   if (forcePreprocess)
     println("  🔄 forcePreprocess=true — regenerando dataset completo...")
   else
@@ -842,44 +843,6 @@ def crearOCargarSplit(
   println(f"  📌 Test  : $nTest%,d registros (${nTest.toDouble / nTotal * 100}%.1f%%)")
 
   (dfTrain, dfTest)
-}
-
-def evaluarModelo(nombre: String,modelo: org.apache.spark.ml.PipelineModel,dfTe: DataFrame,
-evaluador: org.apache.spark.ml.evaluation.RegressionEvaluator,dfTr: Option[DataFrame] = None
-): Unit = {
-
-  val predTest  = modelo.transform(dfTe)
-  val rmseTest  = evaluador.setMetricName("rmse").evaluate(predTest)
-  val maeTest   = evaluador.setMetricName("mae").evaluate(predTest)
-  val r2Test    = evaluador.setMetricName("r2").evaluate(predTest)
-  val mseTest   = rmseTest * rmseTest
-
-  dfTr match {
-    case Some(train) =>
-      // ── Modo completo: train + test ──────────────────────────
-      val predTrain = modelo.transform(train)
-      val rmseTrain = evaluador.setMetricName("rmse").evaluate(predTrain)
-      val maeTrain  = evaluador.setMetricName("mae").evaluate(predTrain)
-      val r2Train   = evaluador.setMetricName("r2").evaluate(predTrain)
-
-      
-      println(s"  Modelo: $nombre") 
-      println(f"  ${"Métrica"}%-10s ${"Train"}%12s ${"Test"}%12s ${"Diferencia"}%12s")
-      println(s"  " + "-" * 48)
-      println(f"  ${"RMSE"}%-10s $rmseTrain%12.4f $rmseTest%12.4f ${rmseTest - rmseTrain}%12.4f")
-      println(f"  ${"MAE"}%-10s $maeTrain%12.4f $maeTest%12.4f ${maeTest - maeTrain}%12.4f")
-      println(f"  ${"R²"}%-10s $r2Train%12.4f $r2Test%12.4f ${r2Test - r2Train}%12.4f")
-      val overfitting = if (math.abs(r2Train - r2Test) > 0.05) "⚠️  posible overfitting" else "✅ sin overfitting"
-      println(s"  $overfitting")
-
-    case None =>
-    
-      println(s"  Modelo: $nombre") 
-      println(f"  R²   : $r2Test%.4f")
-      println(f"  RMSE : $rmseTest%.4f  (error típico ≈ ${(math.exp(rmseTest) - 1) * 100}%.1f%% del precio)")
-      println(f"  MAE  : $maeTest%.4f")
-      println(f"  MSE  : $mseTest%.6f")
-  }
 }
 
  

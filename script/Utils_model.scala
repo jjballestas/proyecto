@@ -97,5 +97,42 @@ object Utils_models {
 
       tvsModel
     }
+        
+    def evaluarModelo(nombre: String,modelo: org.apache.spark.ml.PipelineModel,dfTe: DataFrame,
+    evaluador: org.apache.spark.ml.evaluation.RegressionEvaluator,dfTr: Option[DataFrame] = None    ): Unit = {
+
+      val predTest  = modelo.transform(dfTe)
+      val rmseTest  = evaluador.setMetricName("rmse").evaluate(predTest)
+      val maeTest   = evaluador.setMetricName("mae").evaluate(predTest)
+      val r2Test    = evaluador.setMetricName("r2").evaluate(predTest)
+      val mseTest   = rmseTest * rmseTest
+
+      dfTr match {
+        case Some(train) =>
+          // ── Modo completo: train + test ──────────────────────────
+          val predTrain = modelo.transform(train)
+          val rmseTrain = evaluador.setMetricName("rmse").evaluate(predTrain)
+          val maeTrain  = evaluador.setMetricName("mae").evaluate(predTrain)
+          val r2Train   = evaluador.setMetricName("r2").evaluate(predTrain)
+
+          
+          println(s"  Modelo: $nombre") 
+          println(f"  ${"Métrica"}%-10s ${"Train"}%12s ${"Test"}%12s ${"Diferencia"}%12s")
+          println(s"  " + "-" * 48)
+          println(f"  ${"RMSE"}%-10s $rmseTrain%12.4f $rmseTest%12.4f ${rmseTest - rmseTrain}%12.4f")
+          println(f"  ${"MAE"}%-10s $maeTrain%12.4f $maeTest%12.4f ${maeTest - maeTrain}%12.4f")
+          println(f"  ${"R²"}%-10s $r2Train%12.4f $r2Test%12.4f ${r2Test - r2Train}%12.4f")
+          val overfitting = if (math.abs(r2Train - r2Test) > 0.05) "⚠️  posible overfitting" else "✅ sin overfitting"
+          println(s"  $overfitting")
+
+        case None =>
+        
+          println(s"  Modelo: $nombre") 
+          println(f"  R²   : $r2Test%.4f")
+          println(f"  RMSE : $rmseTest%.4f  (error típico ≈ ${(math.exp(rmseTest) - 1) * 100}%.1f%% del precio)")
+          println(f"  MAE  : $maeTest%.4f")
+          println(f"  MSE  : $mseTest%.6f")
+      }
+    }
 
 }
