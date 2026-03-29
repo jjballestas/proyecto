@@ -274,6 +274,37 @@ def treatSavingsAmount(df: DataFrame, mode: String = "binary"): DataFrame =
     df2.drop(colsToDrop: _*)
   }
 
+
+          def addMajorOptionsFeaturesFromData(df: DataFrame,optionsCol: String     = "major_options",
+          descriptionCol: String = "description",
+          opcionesRelevantes: Seq[String] = Seq("offroadpackage", "navigationsystem", "thirdrowseating", 
+          "sunroof/moonroof", "parkingsensors", "heatedseats","adaptivecruisecontrol", "blindspotmonitoring",
+          "backupcamera", "leatherseats", "multizoneclimatecontrol")): DataFrame = {
+
+              val dfDesc = df.withColumn("description_length",when(col(descriptionCol).isNull, 0)
+              .otherwise(length(col(descriptionCol)))).drop(descriptionCol)
+
+              val dfNorm = dfDesc.withColumn("options_clean",when(col(optionsCol).isNull, "no_options_reported")
+              .otherwise(regexp_replace(lower(col(optionsCol)), "[\\[\\]'\"\\s]", "")))
+
+              val dfCount = dfNorm.withColumn("option_count",when(col("options_clean") === "no_options_reported", 0)
+              .otherwise(size(split(regexp_replace(lower(col(optionsCol)), "[\\[\\]'\\\"\\s]", ""), ","))))
+              
+              println(s"\n  📌 Generando ${opcionesRelevantes.length} variables binarias desde $optionsCol:")
+              opcionesRelevantes.foreach(t =>
+                println(s"     → has_${t.replaceAll("[^a-z0-9]", "_")}"))
+                
+              val dfWithFlags = opcionesRelevantes.foldLeft(dfCount) { (acc, termino) =>
+              val colName = s"has_${termino.replaceAll("[^a-z0-9]", "_")}"
+              acc.withColumn(colName, col("options_clean").contains(termino).cast("int"))
+              }
+              dfWithFlags.drop("options_clean", optionsCol)
+         }
+
+
+
+
+
   def addGeographicFeatures(df: DataFrame): DataFrame = {
 
     val df1 = addGeoRegion(df)
@@ -533,9 +564,11 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
 
   // Fase 2: corte de linaje
   dfWork.write.mode("overwrite").parquet(preImputPath)
-  var dfImp = spark.read.parquet(preImputPath)
-
-  // Fase 3: imputación y features finales
+  var dfImp = spark.read.parquet(preImputPath) 
+ 
+  dfImp = addMajorOptionsFeaturesFromData(dfImp)   
+ 
+ // Fase 3: imputación y features finales
   dfImp = imputeDimensions(dfImp)
   dfImp = imputeEngineSpecs(dfImp)
   dfImp = imputeFuelEconomy(dfImp)
