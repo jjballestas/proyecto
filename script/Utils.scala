@@ -10,11 +10,11 @@ import org.apache.spark.sql.types._
 
 Logger.getLogger("org").setLevel(Level.ERROR)
 Logger.getLogger("akka").setLevel(Level.ERROR)
+Logger.getLogger("org.apache.spark.scheduler.DAGScheduler").setLevel(Level.ERROR)
+Logger.getLogger("org.apache.spark.util.SizeEstimator").setLevel(Level.OFF)
+
+
  
-
-
-object Utils { 
-  
   //esta función verifica si un archivo o directorio existe en HDFS
   def hdfsExists(spark: SparkSession, path: String): Boolean = {
   val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
@@ -567,98 +567,98 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
 
 
 def mostrarResumenFinal(df: DataFrame): Unit = {
-  val total     = df.count()
-  val sepAncho  = 70
+    val total     = df.count()
+    val sepAncho  = 70
 
-  // esta función auxiliar imprime una secuencia de strings en columnas formateadas 
-  // mejora la legibilidad del resumen final
-def imprimirEnColumnas(cols: Seq[String], colWidth: Int = 30, colsPorFila: Int = 3): Unit = {
-  cols.grouped(colsPorFila).foreach { grupo =>
-    println("     " + grupo.map(c => c.padTo(colWidth, ' ')).mkString("  "))
-  }
-}
-
-  println("\n" + "=" * sepAncho)
-  println("  RESUMEN DATASET FINAL")
-  println("=" * sepAncho)
-
-  // ── Dimensiones ───────────────────────────────────────────
-  println(f"\n  📌 Registros : $total%,d")
-  println(f"  📌 Columnas  : ${df.columns.length}%d")
-
-  // ── Tipos de columnas ─────────────────────────────────────
-  val porTipo = df.dtypes.groupBy(_._2).mapValues(_.length)
-  println(s"\n  📌 Tipos:")
-  porTipo.toSeq.sortBy(_._1).foreach { case (tipo, n) =>
-    val tipoCorto = tipo.replace("Type", "")
-    println(f"     $tipoCorto%-15s $n%d columnas")
-  }
-
-  // ── Nulos ─────────────────────────────────────────────────
-  val nullExprs = df.dtypes.map { case (colName, dataType) =>
-    val cond = dataType match {
-      case "DoubleType" | "FloatType" => col(colName).isNull || col(colName).isNaN
-      case "StringType"               => col(colName).isNull || trim(col(colName)) === ""
-      case _                          => col(colName).isNull
-    }
-    sum(when(cond, 1).otherwise(0)).alias(colName)
-  }
-  val nullRow     = df.select(nullExprs: _*).head()
-  val colsConNull = df.columns.zipWithIndex
-    .map { case (c, i) => (c, nullRow.getLong(i)) }
-    .filter(_._2 > 0)
-
-  if (colsConNull.isEmpty)
-    println("\n  ✅ Nulls: 0 en todas las columnas")
-  else {
-    println(s"\n  ⚠️  Columnas con nulls: ${colsConNull.length}")
-    colsConNull.foreach { case (c, n) =>
-      val pct = n.toDouble / total * 100
-      println(f"     $c%-35s $n%,d ($pct%.2f%%)")
+    // esta función auxiliar imprime una secuencia de strings en columnas formateadas 
+    // mejora la legibilidad del resumen final
+  def imprimirEnColumnas(cols: Seq[String], colWidth: Int = 30, colsPorFila: Int = 3): Unit = {
+    cols.grouped(colsPorFila).foreach { grupo =>
+      println("     " + grupo.map(c => c.padTo(colWidth, ' ')).mkString("  "))
     }
   }
 
-  // ── Variable objetivo ─────────────────────────────────────
-  if (df.columns.contains("log_price")) {
-    val row = df.select(
-      min("log_price"), max("log_price"),
-      avg("log_price"),
-      expr("percentile_approx(log_price, 0.5)"),
-      skewness("log_price")
-    ).head()
-    println("\n  📌 Target — log_price:")
-    println(f"     min    : ${row.getDouble(0)}%.4f")
-    println(f"     max    : ${row.getDouble(1)}%.4f")
-    println(f"     media  : ${row.getDouble(2)}%.4f")
-    println(f"     mediana: ${row.getDouble(3)}%.4f")
-    println(f"     skew   : ${row.getDouble(4)}%.4f")
-  }
+    println("\n" + "=" * sepAncho)
+    println("  RESUMEN DATASET FINAL")
+    println("=" * sepAncho)
 
-  // ── Columnas categóricas ──────────────────────────────────
-  val catCols = df.dtypes.filter(_._2 == "StringType").map(_._1).sorted
-  println(s"\n  📌 Variables categóricas (${catCols.length}):")
-  println("     " + "-" * (sepAncho - 5))
-  imprimirEnColumnas(catCols, colWidth = 25, colsPorFila = 3)
+    // ── Dimensiones ───────────────────────────────────────────
+    println(f"\n  📌 Registros : $total%,d")
+    println(f"  📌 Columnas  : ${df.columns.length}%d")
 
-  // ── Columnas numéricas — separadas por grupo ──────────────
-  val numCols = df.dtypes
-    .filter { case (_, t) => t == "DoubleType" || t == "IntegerType" || t == "FloatType" }
-    .map(_._1)
-    .filterNot(_ == "log_price")
+    // ── Tipos de columnas ─────────────────────────────────────
+    val porTipo = df.dtypes.groupBy(_._2).mapValues(_.length)
+    println(s"\n  📌 Tipos:")
+    porTipo.toSeq.sortBy(_._1).foreach { case (tipo, n) =>
+      val tipoCorto = tipo.replace("Type", "")
+      println(f"     $tipoCorto%-15s $n%d columnas")
+    }
 
-  // Separar por sufijo para agrupar visualmente
-  val missingCols  = numCols.filter(_.endsWith("_missing")).sorted
-  val featureCols  = numCols.filterNot(_.endsWith("_missing")).sorted
+    // ── Nulos ─────────────────────────────────────────────────
+    val nullExprs = df.dtypes.map { case (colName, dataType) =>
+      val cond = dataType match {
+        case "DoubleType" | "FloatType" => col(colName).isNull || col(colName).isNaN
+        case "StringType"               => col(colName).isNull || trim(col(colName)) === ""
+        case _                          => col(colName).isNull
+      }
+      sum(when(cond, 1).otherwise(0)).alias(colName)
+    }
+    val nullRow     = df.select(nullExprs: _*).head()
+    val colsConNull = df.columns.zipWithIndex
+      .map { case (c, i) => (c, nullRow.getLong(i)) }
+      .filter(_._2 > 0)
 
-  println(s"\n  📌 Variables numéricas — features (${featureCols.length}):")
-  println("     " + "-" * (sepAncho - 5))
-  imprimirEnColumnas(featureCols, colWidth = 28, colsPorFila = 3)
+    if (colsConNull.isEmpty)
+      println("\n  ✅ Nulls: 0 en todas las columnas")
+    else {
+      println(s"\n  ⚠️  Columnas con nulls: ${colsConNull.length}")
+      colsConNull.foreach { case (c, n) =>
+        val pct = n.toDouble / total * 100
+        println(f"     $c%-35s $n%,d ($pct%.2f%%)")
+      }
+    }
 
-  println(s"\n  📌 Variables numéricas — flags missing (${missingCols.length}):")
-  println("     " + "-" * (sepAncho - 5))
-  imprimirEnColumnas(missingCols, colWidth = 32, colsPorFila = 2)
+    // ── Variable objetivo ─────────────────────────────────────
+    if (df.columns.contains("log_price")) {
+      val row = df.select(
+        min("log_price"), max("log_price"),
+        avg("log_price"),
+        expr("percentile_approx(log_price, 0.5)"),
+        skewness("log_price")
+      ).head()
+      println("\n  📌 Target — log_price:")
+      println(f"     min    : ${row.getDouble(0)}%.4f")
+      println(f"     max    : ${row.getDouble(1)}%.4f")
+      println(f"     media  : ${row.getDouble(2)}%.4f")
+      println(f"     mediana: ${row.getDouble(3)}%.4f")
+      println(f"     skew   : ${row.getDouble(4)}%.4f")
+    }
 
-  println("\n" + "=" * sepAncho + "\n")
+    // ── Columnas categóricas ──────────────────────────────────
+    val catCols = df.dtypes.filter(_._2 == "StringType").map(_._1).sorted
+    println(s"\n  📌 Variables categóricas (${catCols.length}):")
+    println("     " + "-" * (sepAncho - 5))
+    imprimirEnColumnas(catCols, colWidth = 25, colsPorFila = 3)
+
+    // ── Columnas numéricas — separadas por grupo ──────────────
+    val numCols = df.dtypes
+      .filter { case (_, t) => t == "DoubleType" || t == "IntegerType" || t == "FloatType" }
+      .map(_._1)
+      .filterNot(_ == "log_price")
+
+    // Separar por sufijo para agrupar visualmente
+    val missingCols  = numCols.filter(_.endsWith("_missing")).sorted
+    val featureCols  = numCols.filterNot(_.endsWith("_missing")).sorted
+
+    println(s"\n  📌 Variables numéricas — features (${featureCols.length}):")
+    println("     " + "-" * (sepAncho - 5))
+    imprimirEnColumnas(featureCols, colWidth = 28, colsPorFila = 3)
+
+    println(s"\n  📌 Variables numéricas — flags missing (${missingCols.length}):")
+    println("     " + "-" * (sepAncho - 5))
+    imprimirEnColumnas(missingCols, colWidth = 32, colsPorFila = 2)
+
+    println("\n" + "=" * sepAncho + "\n")
 }
 //*******************************************************************************************
 //  FIN DE LA FASE DE PREPROCESADO COMPLETO
@@ -957,7 +957,5 @@ numFolds: Int = 5,seed: Long = 42L,resultadosPath: String): org.apache.spark.ml.
   cvModel
 }
 
-
-}
-
+ 
 

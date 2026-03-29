@@ -8,3 +8,4 @@
 *.crc
 *parquet
 modelos/*
+resultados/*

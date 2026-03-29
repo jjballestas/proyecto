@@ -1,47 +1,574 @@
-:load Utils.scala
 
-
-
-   object edaUtils {
-        
-    def analisisEDA(df: DataFrame): Unit = {
-      println("\n==================== EDA: Análisis Exploratorio ====================\n") 
-
-      mostrarNulosPorColumna(df)
  
-      println("\n  Resumen de variables numéricas:\n")
+     
+        
 
-      resumenNumericoTabular(df.drop("vin","listing_id","sp_id")) // excluimos identificadores para este resumen
-      val categoricas = Seq("body_type","fuel_type","transmission","make_name","model_name","exterior_color",
-      "interior_color","wheel_system")
+        def mostrarNulosPorColumna(df: DataFrame): Unit = {
 
+          val countExpr = count("*").alias("__total__")
+          val nullExprs = df.dtypes.map { case (colName, dataType) =>
+            val nullCondition = dataType match {
+              case "DoubleType" | "FloatType" => col(colName).isNull || col(colName).isNaN
+              case "StringType"               => col(colName).isNull || trim(col(colName)) === ""
+              case _                          => col(colName).isNull
+            }
+            sum(when(nullCondition, 1).otherwise(0)).alias(colName)
+          }
+          val resultRow  = df.select(countExpr +: nullExprs: _*).head()
+          val totalRows  = resultRow.getLong(0)
 
-      resumenCategoricoTabular(df, categoricas)
+          println("  Valores nulos por columna:")
+          println(f"${"Columna"}%-25s ${"Nulos"}%12s ${"% Nulos"}%12s")
+          println("-" * 52)
 
-      val booleanas = Seq("fleet","frame_damaged","franchise_dealer","has_accidents","isCab","is_cpo","is_new","is_oemcpo","salvage","theft_title")
+          df.columns.zipWithIndex.foreach { case (colName, idx) =>
+            val nulls      = resultRow.getLong(idx + 1)   // +1: saltamos __total__
+            val porcentaje = if (totalRows > 0) nulls.toDouble / totalRows * 100.0 else 0.0
+            println(f"$colName%-25s $nulls%12d $porcentaje%11.2f%%")
+          }
 
-      println("\n  Resumen de variables booleanas:\n")
-      resumenBooleanasTabular(df, booleanas)
+          println()
+        }
 
-      val textoNoEstructurado = Seq("description", "major_options")
-      resumenTextoTabular(df, textoNoEstructurado)
+        
+        //esta función realiza un análisis exploratorio de datos (EDA) específico para la variable objetivo "price",
+        
+        //esta función analiza la correlación entre variables numéricas y la variable objetivo "price", 
+        //calcula el coeficiente de correlación de Pearson para cada variable numérica en relación con "price".
+        def analyzeCorrelationWithPrice(df: DataFrame,targetCol: String = "price",excludeCols: Seq[String] = Seq() ): Unit = {
 
-      val malTipadas = Seq("engine_cylinders","power","torque","back_legroom","fuel_tank_volume","width","height")
-      resumenMalTipadasTabular(df, malTipadas)
+          
+          val numCols = df.dtypes.filter { case (name, dtype) =>
+              dtype == "DoubleType"  ||
+              dtype == "FloatType"   ||
+              dtype == "IntegerType" ||
+              dtype == "LongType"
+            }.map(_._1).filterNot(c => c == targetCol || excludeCols.contains(c))
+            val corrExprs = numCols.map { c =>
+            corr(col(c), col(targetCol)).alias(c)
+          }
+
+          val corrRow = df.filter(col(targetCol).isNotNull).select(corrExprs: _*).head()
+          
+          val results = numCols.map { c =>
+            val idx   = corrRow.fieldIndex(c)
+            val value = if (corrRow.isNullAt(idx)) Double.NaN else corrRow.getDouble(idx)
+            (c, value)
+          }.sortBy { case (_, v) => -math.abs(v) }
+
+          // Imprimir tabla
+          val sep = "+" + "-" * 32 + "+" + "-" * 12 + "+" + "-" * 18 + "+"
+          println(s"\n  Correlación de variables numéricas con '$targetCol':")
+          println(sep)
+          println(f"| ${"Variable"}%-30s | ${"Corr"}%10s | ${"Interpretación"}%-16s |")
+          println(sep)
+
+          results.foreach { case (colName, v) =>
+            val bar = {
+              val filled = math.round(math.abs(v) * 10).toInt
+              val sign   = if (v >= 0) "▲" else "▼"
+              sign + "█" * filled + "░" * (10 - filled)
+            }
+            val label = math.abs(v) match {
+              case x if x.isNaN  => "sin datos"
+              case x if x >= 0.6 => "fuerte"
+              case x if x >= 0.3 => "moderada"
+              case x if x >= 0.1 => "débil"
+              case _             => "nula"
+            }
+            println(f"| $colName%-30s | ${v}%+10.4f | $bar $label%-6s |")
+          }
+
+          println(sep)
+          println("  ▲ positiva  ▼ negativa  █ intensidad  (ordenado por |corr| desc)\n")
+        }
+        
+    
+        //esta función filtra un DataFrame para obtener solo filas donde la columna numérica especificada no es nula,
+        // y opcionalmente solo valores positivos.
+        def getValidNumericDF(df: DataFrame,numericCol: String,positiveOnly: Boolean = false): DataFrame = {
+          val base = df.filter(col(numericCol).isNotNull)
+
+          if (positiveOnly) base.filter(col(numericCol) > 0)
+          else base
+        }
+
       
-      val identificadoras = Seq("vin", "listing_id", "sp_id")
-      resumenIdentificadoresTabular(df, identificadoras)
-      
-      val columnasString = df.schema.fields.filter(_.dataType.simpleString == "string").map(_.name).toSeq
-      val candidatos = detectarParesRedundantesPorNombre(columnasString)
-      validarParesRedundantes(df, candidatos)
+        //esta función calcula las estadísticas de una variable numérica específica, 
+        //como conteo, mínimo, máximo, media, mediana, desviación estándar, asimetría y curtosis.
+        def analyzeNumericGlobalStats(df: DataFrame,numericCol: String,positiveOnly: Boolean = false  ): DataFrame = {
+          val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
 
-      resumenGeografico(df)
-      
-      resumenTemporalTabular(df= df,listedDateCol  = "listed_date",yearCol= "year",daysOnMarketCol = "daysonmarket",nEjemplos= 10)
-      
-      analizarGruposFuncionales(df)
-    }
+          dfNum.select(
+            count("*").alias("n"),
+            min(numericCol).alias("min_value"),
+            max(numericCol).alias("max_value"),
+            avg(numericCol).alias("mean_value"),
+            expr(s"percentile_approx($numericCol, 0.5)").alias("median_value"),
+            stddev(numericCol).alias("std_value"),
+            skewness(numericCol).alias("skew_value"),
+            kurtosis(numericCol).alias("kurt_value")
+          )
+        }
+
+        //esta función calcula los percentiles de una variable numérica específica,
+        // permitiendo filtrar solo valores positivos y especificar los percentiles deseados.
+        def analyzeNumericPercentiles(df: DataFrame,numericCol: String,positiveOnly: Boolean = false,
+          probs: Seq[Double] = Seq(0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99, 0.995, 0.999)): DataFrame = {
+          val spark = df.sparkSession   
+          val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
+          val percentileValues = dfNum.stat.approxQuantile(numericCol, probs.toArray, 0.001)
+
+          probs.zip(percentileValues).map { case (p, v) => (p, v) }.toDF("percentile", s"${numericCol}_value")
+        }
+
+
+
+
+
+        //esta función compara la distribución de una variable numérica con su transformación logarítmica,
+        // calculando y mostrando los valores de asimetría (skewness) y curtosis (kurtosis) para ambas versiones de la variable.
+          def analyzeNumericVsLog(df: DataFrame,numericCol: String,positiveOnly: Boolean = true
+          ): DataFrame = {
+            val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
+              .withColumn("log_value_tmp", log1p(col(numericCol)))
+
+            dfNum.select(
+              skewness(numericCol).alias("skew_value"),
+              kurtosis(numericCol).alias("kurt_value"),
+              skewness("log_value_tmp").alias("skew_log_value"),
+              kurtosis("log_value_tmp").alias("kurt_log_value")
+            )
+          }
+
+        //esta función obtiene los registros con los valores más altos de una variable numérica ,
+        // filtrando solo valores positivos, y permite incluir columnas adicionales para contexto.
+          def getTopExtremeValues(df: DataFrame,numericCol: String,positiveOnly: Boolean = false,topN: Int = 30,extraCols: Seq[String] = Seq()
+          ): DataFrame = {
+            val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
+            val selectedCols = (Seq(numericCol) ++ extraCols.filter(df.columns.contains)).distinct
+
+            dfNum.select(selectedCols.map(col): _*).orderBy(desc(numericCol)).limit(topN)
+          }
+
+
+        //esta función agrega columnas al DataFrame con los límites de outliers basados en el rango intercuartílico (IQR) 
+        //para una variable numérica específica, utilizando los cuartiles Q1 y Q3.
+        //la utilizo para refactorizar el código y evitar repetir la lógica de cálculo de límites IQR 
+        //(getGlobalIQROutlierBounds y getNumericSegmentStats)
+        def addIQRBounds(df: DataFrame, q1Col: String = "q1", q3Col: String = "q3"): DataFrame = {
+          df.withColumn("iqr", col(q3Col) - col(q1Col))
+            .withColumn("lower_bound_iqr_1_5", col(q1Col) - lit(1.5) * col("iqr"))
+            .withColumn("upper_bound_iqr_1_5", col(q3Col) + lit(1.5) * col("iqr"))
+            .withColumn("lower_bound_iqr_3_0", col(q1Col) - lit(3.0) * col("iqr"))
+            .withColumn("upper_bound_iqr_3_0", col(q3Col) + lit(3.0) * col("iqr"))
+        }
+
+        //esta función calcula los límites de outliers basados en el rango intercuartílico (IQR) 
+        //para una variable numérica específica a nivel global,
+        def getGlobalIQROutlierBounds(df: DataFrame,numericCol: String,positiveOnly: Boolean = false): DataFrame = {
+          val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
+
+          val stats = dfNum.selectExpr(
+            s"percentile_approx($numericCol, 0.25) as q1",
+            s"percentile_approx($numericCol, 0.50) as median",
+            s"percentile_approx($numericCol, 0.75) as q3"
+          )
+
+          addIQRBounds(stats)
+        }
+
+        //esta función calcula estadísticas  de una variable numérica específica,segmentada por una o más columnas categóricas
+        //  y agrega límites de outliers basados en el rango intercuartílico (IQR)  para cada segmento
+        // permitiendo filtrar solo valores positivos y establecer un tamaño mínimo de grupo 
+        //para considerar las estadísticas válidas.
+
+
+        def getNumericSegmentStats(df: DataFrame, numericCol: String, segmentCols: Seq[String], 
+                                  positiveOnly: Boolean = false, minGroupSize: Int = 30): DataFrame = {
+          
+          val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
+          val validSegmentCols = segmentCols.filter(dfNum.columns.contains)
+
+          val stats = dfNum.groupBy(validSegmentCols.map(col): _*).agg(
+              count("*").alias("group_n"),
+              min(numericCol).alias("min_value"),
+              expr(s"percentile_approx($numericCol, 0.25)").alias("q1"),
+              expr(s"percentile_approx($numericCol, 0.5)").alias("median_value"),
+              expr(s"percentile_approx($numericCol, 0.75)").alias("q3"),
+              expr(s"percentile_approx($numericCol, 0.95)").alias("p95"),
+              expr(s"percentile_approx($numericCol, 0.99)").alias("p99"),
+              avg(numericCol).alias("mean_value"),
+              max(numericCol).alias("max_value"),
+              // 1. Agregamos Desviación Estándar para entender la dispersión real
+              stddev(numericCol).alias("stddev_value"),
+              skewness(numericCol).alias("skew_value")
+            )
+            .filter(col("group_n") >= minGroupSize).withColumn("cv_percentage", (col("stddev_value") / col("mean_value")) * 100)
+
+          val statsWithBounds = addIQRBounds(stats)
+            statsWithBounds.withColumn("lower_bound_iqr_1_5", when(col("lower_bound_iqr_1_5") < 0, 0).otherwise(col("lower_bound_iqr_1_5")))
+        }
+
+
+        //esta función identifica outliers sospechosos en una variable numérica específica,
+        // segmentada por una o más columnas categóricas,  utilizando límites basados en el rango intercuartílico (IQR) 
+        //y permitiendo filtrar solo valores positivos y establecer un valor mínimo absoluto para considerar un outlier como sospechoso.
+          def detectSuspiciousNumericOutliersBySegment(df: DataFrame,numericCol: String,segmentCols: Seq[String],
+          positiveOnly: Boolean = false,minGroupSize: Int = 30,iqrMultiplier: Double = 3.0,
+          minAbsoluteValue: Double = Double.MinValue,extraCols: Seq[String] = Seq()): DataFrame = {
+
+          val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
+          val validSegmentCols = segmentCols.filter(dfNum.columns.contains)
+          val selectedExtraCols = extraCols.filter(dfNum.columns.contains).distinct
+
+          val baseStats = dfNum.groupBy(validSegmentCols.map(col): _*).agg(
+              count("*").alias("group_n"),
+              expr(s"percentile_approx($numericCol, 0.25)").alias("q1"),
+              expr(s"percentile_approx($numericCol, 0.5)").alias("segment_median_value"),
+              expr(s"percentile_approx($numericCol, 0.75)").alias("q3"),
+              expr(s"percentile_approx($numericCol, 0.95)").alias("segment_p95"),
+              expr(s"percentile_approx($numericCol, 0.99)").alias("segment_p99")
+            ).filter(col("group_n") >= minGroupSize)
+
+          val statsWithBounds = addIQRBounds(baseStats, "q1", "q3")
+            .withColumn("segment_upper_bound", col("q3") + lit(iqrMultiplier) * col("iqr"))
+            .withColumn("segment_lower_bound", col("q1") - lit(iqrMultiplier) * col("iqr"))
+
+          dfNum.join(statsWithBounds, validSegmentCols, "inner").withColumn(
+              s"${numericCol}_to_median_ratio",
+              when(col("segment_median_value").isNotNull && col("segment_median_value") =!= 0,
+                col(numericCol) / col("segment_median_value")
+              ).otherwise(lit(null).cast("double"))
+            ).withColumn(
+              s"${numericCol}_to_p95_ratio",
+              when(col("segment_p95").isNotNull && col("segment_p95") =!= 0,
+                col(numericCol) / col("segment_p95")
+              ).otherwise(lit(null).cast("double"))
+            ).withColumn(
+              s"${numericCol}_to_p99_ratio",
+              when(col("segment_p99").isNotNull && col("segment_p99") =!= 0,
+                col(numericCol) / col("segment_p99")
+              ).otherwise(lit(null).cast("double"))
+            ).filter(
+              (col(numericCol) > col("segment_upper_bound") || col(numericCol) < col("segment_lower_bound")) &&
+              col(numericCol) >= lit(minAbsoluteValue)
+            ).select(
+              validSegmentCols.map(col) ++
+              Seq(col("group_n"),col(numericCol),col("q1"),col("segment_median_value"),col("q3"),col("segment_p95"),
+              col("segment_p99"),col("iqr"),col("segment_lower_bound"),col("segment_upper_bound"),
+              col(s"${numericCol}_to_median_ratio"),col(s"${numericCol}_to_p95_ratio"),col(s"${numericCol}_to_p99_ratio")
+              ) ++
+              selectedExtraCols.map(col): _*
+            ).orderBy(desc(numericCol))
+        }
+
+          // ---------------------------------------------------------
+          // Resumen de outliers sospechosos por segmento
+          // ---------------------------------------------------------
+          def summarizeSuspiciousNumericOutliers(suspiciousDF: DataFrame,numericCol: String,segmentCols: Seq[String]): DataFrame = {
+            suspiciousDF.groupBy(segmentCols.map(col): _*).agg(
+                count("*").alias("n_suspicious"),
+                min(numericCol).alias("min_suspicious_value"),
+                expr(s"percentile_approx($numericCol, 0.5)").alias("median_suspicious_value"),
+                max(numericCol).alias("max_suspicious_value")
+              ).orderBy(desc("n_suspicious"), desc("max_suspicious_value"))
+          }
+
+          // ---------------------------------------------------------
+          // Mostrar DataFrame con título
+          // ---------------------------------------------------------
+          def showDF(title: String, df: DataFrame, n: Int = 50): Unit = {
+            println(s"\n=== $title ===")
+            df.show(n, truncate = false)
+          }
+
+          
+
+          def getValidPriceDF(df: DataFrame, priceCol: String = "price"): DataFrame = {
+            getValidNumericDF(df, priceCol, positiveOnly = true)
+          }
+
+          def analyzePriceGlobalStats(df: DataFrame, priceCol: String = "price"): DataFrame = {
+            analyzeNumericGlobalStats(df, priceCol, positiveOnly = true)
+              .withColumnRenamed("min_value", "min_price")
+              .withColumnRenamed("max_value", "max_price")
+              .withColumnRenamed("mean_value", "mean_price")
+              .withColumnRenamed("median_value", "median_price")
+              .withColumnRenamed("std_value", "std_price")
+              .withColumnRenamed("skew_value", "skew_price")
+              .withColumnRenamed("kurt_value", "kurt_price")
+          }
+        
+          def analyzePricePercentiles( df: DataFrame,priceCol: String = "price",
+          probs: Seq[Double] = Seq(0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99, 0.995, 0.999)): DataFrame = {
+            analyzeNumericPercentiles(df, priceCol, positiveOnly = true, probs = probs)
+          }
+
+        
+
+
+          def analyzePriceVsLogPrice(df: DataFrame, priceCol: String = "price"): DataFrame = {
+            analyzeNumericVsLog(df, priceCol, positiveOnly = true)
+              .withColumnRenamed("skew_value", "skew_price")
+              .withColumnRenamed("kurt_value", "kurt_price")
+              .withColumnRenamed("skew_log_value", "skew_log_price")
+              .withColumnRenamed("kurt_log_value", "kurt_log_price")
+          }
+
+          def analyzePriceByCategory(df: DataFrame,categoryCol: String,priceCol: String = "price",topN: Int = 50,minCount: Int = 1
+          ): DataFrame = {
+            val dfPrice = getValidPriceDF(df, priceCol)
+
+            dfPrice.groupBy(categoryCol).agg(count("*").alias("n"),
+                min(priceCol).alias("min_price"),
+                expr(s"percentile_approx($priceCol, 0.25)").alias("p25"),
+                expr(s"percentile_approx($priceCol, 0.5)").alias("median_price"),
+                expr(s"percentile_approx($priceCol, 0.75)").alias("p75"),
+                expr(s"percentile_approx($priceCol, 0.95)").alias("p95"),
+                max(priceCol).alias("max_price"),
+                avg(priceCol).alias("mean_price"),
+                skewness(priceCol).alias("skew_price")
+              ).filter(col("n") >= minCount).orderBy(desc("median_price")).limit(topN)
+          }
+
+          def analyzePriceByTopCategories(
+              df: DataFrame,categoryCol: String,priceCol: String = "price",topCategories: Int = 20
+          ): DataFrame = {
+            val dfPrice = getValidPriceDF(df, priceCol)
+
+            val topCats = dfPrice.groupBy(categoryCol).count().orderBy(desc("count")).limit(topCategories).select(categoryCol)
+
+            dfPrice.join(topCats, Seq(categoryCol)).groupBy(categoryCol).agg(
+                count("*").alias("n"),
+                min(priceCol).alias("min_price"),
+                expr(s"percentile_approx($priceCol, 0.25)").alias("p25"),
+                expr(s"percentile_approx($priceCol, 0.5)").alias("median_price"),
+                expr(s"percentile_approx($priceCol, 0.75)").alias("p75"),
+                expr(s"percentile_approx($priceCol, 0.95)").alias("p95"),
+                max(priceCol).alias("max_price"),
+                avg(priceCol).alias("mean_price")
+              ).orderBy(desc("median_price"))
+          }
+
+          def analyzePriceByYear(df: DataFrame, priceCol: String = "price"): DataFrame = {
+            val dfPrice = getValidPriceDF(df, priceCol)
+
+            dfPrice.groupBy("year").agg(
+                count("*").alias("n"),
+                expr(s"percentile_approx($priceCol, 0.5)").alias("median_price"),
+                expr(s"percentile_approx($priceCol, 0.95)").alias("p95"),
+                max(priceCol).alias("max_price"),
+                avg(priceCol).alias("mean_price"),
+                skewness(priceCol).alias("skew_price")
+              ).orderBy(desc("year"))
+          }
+
+          def getTopExpensiveVehicles(df: DataFrame,priceCol: String = "price",topN: Int = 30): DataFrame = {
+            getTopExtremeValues(
+              df = df,
+              numericCol = priceCol,
+              positiveOnly = true,
+              topN = topN,
+              extraCols = Seq("make_name", "model_name", "trim_name", "year", "body_type", "fuel_type", "is_new", "mileage", "horsepower")
+            )
+          }
+
+          def getTopKPriceByCategory( df: DataFrame,categoryCol: String,priceCol: String = "price",topCategories: Int = 15,k: Int = 5): DataFrame = {
+            val dfPrice = getValidPriceDF(df, priceCol)
+
+            val topCats = dfPrice.groupBy(categoryCol).count().orderBy(desc("count")).limit(topCategories).select(categoryCol)
+
+            val w = org.apache.spark.sql.expressions.Window.partitionBy(categoryCol).orderBy(desc(priceCol))
+
+            dfPrice.join(topCats, Seq(categoryCol)).withColumn("rn", row_number().over(w)).filter(col("rn") <= k).select(
+                col(categoryCol),col("model_name"),col("trim_name"),col("year"),col("body_type"),
+                col("is_new"),col("mileage"),col("horsepower"),col(priceCol),col("rn")
+              ).orderBy(col(categoryCol), desc(priceCol))
+          }
+
+          def summarizePriceTransformationDecision(df: DataFrame,priceCol: String = "price"): DataFrame = {
+            val stats = analyzeNumericGlobalStats(df, priceCol, positiveOnly = true)
+            val vsLog = analyzeNumericVsLog(df, priceCol, positiveOnly = true)
+
+            stats.crossJoin(vsLog.select(
+              col("skew_log_value"),
+              col("kurt_log_value")
+            )).withColumnRenamed("min_value", "min_price").withColumnRenamed("max_value", "max_price").withColumnRenamed("mean_value", "mean_price")
+            .withColumnRenamed("median_value", "median_price").withColumnRenamed("std_value", "std_price").withColumnRenamed("skew_value", "skew_price")
+            .withColumnRenamed("kurt_value", "kurt_price").withColumnRenamed("skew_log_value", "skew_log_price").withColumnRenamed("kurt_log_value", "kurt_log_price")
+          }
+
+          def getGlobalPricePercentiles(df: DataFrame, priceCol: String = "price"): DataFrame = {
+            analyzeNumericPercentiles(df,numericCol = priceCol,positiveOnly = true,probs = Seq(0.25, 0.50, 0.75, 0.95, 0.99, 0.995, 0.999))
+            .withColumnRenamed("percentiles", "price_percentiles")
+          }
+
+        
+          def getPriceSegmentStats(df: DataFrame,segmentCols: Seq[String],priceCol: String = "price",minGroupSize: Int = 30): DataFrame = {
+            getNumericSegmentStats(
+              df = df,
+              numericCol = priceCol,
+              segmentCols = segmentCols,
+              positiveOnly = true,
+              minGroupSize = minGroupSize
+            ).withColumnRenamed("min_value", "min_price").withColumnRenamed("median_value", "median_price")
+            .withColumnRenamed("mean_value", "mean_price").withColumnRenamed("max_value", "max_price").withColumnRenamed("skew_value", "skew_price")
+          }
+
+          def detectSuspiciousPriceOutliersBySegment(df: DataFrame,segmentCols: Seq[String],priceCol: String = "price",
+          minGroupSize: Int = 30,iqrMultiplier: Double = 3.0,minAbsolutePrice: Double = 100000.0): DataFrame = {
+            detectSuspiciousNumericOutliersBySegment(
+              df = df,
+              numericCol = priceCol,
+              segmentCols = segmentCols,
+              positiveOnly = true,
+              minGroupSize = minGroupSize,
+              iqrMultiplier = iqrMultiplier,
+              minAbsoluteValue = minAbsolutePrice,
+              extraCols = Seq("make_name", "model_name", "trim_name", "year", "body_type", "is_new", "mileage", "horsepower")
+            )
+            .withColumnRenamed("segment_median_value", "segment_median_price").withColumnRenamed("price_to_median_ratio", "price_to_median_ratio")
+            .withColumnRenamed("price_to_p95_ratio", "price_to_p95_ratio").withColumnRenamed("price_to_p99_ratio", "price_to_p99_ratio")
+          }
+
+          def detectSuspiciousPriceOutliersHierarchical(df: DataFrame,priceCol: String = "price",minGroupSize: Int = 30,
+              iqrMultiplier: Double = 3.0,
+              minAbsolutePrice: Double = 100000.0
+          ): DataFrame = {
+            val segmentCols = Seq("make_name", "body_type", "is_new").filter(df.columns.contains)
+
+            detectSuspiciousPriceOutliersBySegment(
+              df = df,
+              segmentCols = segmentCols,
+              priceCol = priceCol,
+              minGroupSize = minGroupSize,
+              iqrMultiplier = iqrMultiplier,
+              minAbsolutePrice = minAbsolutePrice
+            )
+          }
+
+          def summarizeSuspiciousPriceOutliers(
+              suspiciousDF: DataFrame,
+              segmentCols: Seq[String]
+          ): DataFrame = {
+            summarizeSuspiciousNumericOutliers(suspiciousDF, "price", segmentCols)
+              .withColumnRenamed("min_suspicious_value", "min_suspicious_price")
+              .withColumnRenamed("median_suspicious_value", "median_suspicious_price")
+              .withColumnRenamed("max_suspicious_value", "max_suspicious_price")
+          }
+
+          def topSuspiciousPriceOutliersByMake(
+              suspiciousDF: DataFrame,
+              topN: Int = 100
+          ): DataFrame = {
+            suspiciousDF.orderBy(desc("price")).limit(topN)
+          }
+            
+            
+
+
+          // ---------------------------------------------------------
+          // Analizar contenido de columnas string antes de procesarlas
+          // ---------------------------------------------------------
+          def analyzeStringColumnsContent(df: DataFrame,colsToAnalyze: Seq[String],sampleTopN: Int = 20          ): Unit = {
+
+            val validCols = colsToAnalyze.filter(df.columns.contains)
+
+            validCols.foreach { c =>
+              println(s"\n==================== Análisis de: $c ====================")
+
+              val base = df.select(col(c))
+
+              val summary = base.agg(
+                count("*").alias("n_total"),
+                sum(when(col(c).isNull, 1).otherwise(0)).alias("n_null"),
+                sum(when(trim(col(c)) === "", 1).otherwise(0)).alias("n_empty"),
+                sum(when(trim(lower(col(c))).isin("null", "none", "--", "n/a", "na"), 1).otherwise(0)).alias("n_placeholder"),
+                countDistinct(col(c)).alias("n_distinct"),
+                sum(
+                  when(
+                    regexp_extract(col(c), "([0-9]+\\.?[0-9]*)", 1) =!= "",
+                    1
+                  ).otherwise(0)
+                ).alias("n_with_number")
+              )
+
+              println("---- Resumen ----")
+              summary.show(false)
+
+              println("---- Top valores más frecuentes ----")
+              base.groupBy(col(c)).count().orderBy(desc("count")).show(sampleTopN, truncate = false)
+
+              println("---- Ejemplos con número extraíble ----")
+              base.filter(regexp_extract(col(c), "([0-9]+\\.?[0-9]*)", 1) =!= "").groupBy(col(c)).count()
+              .orderBy(desc("count")).show(sampleTopN, truncate = false)
+
+              println("---- Ejemplos sin número extraíble ----")
+              base.filter(
+                col(c).isNotNull &&
+                trim(col(c)) =!= "" &&
+                !trim(lower(col(c))).isin("null", "none", "--", "n/a", "na") &&
+                regexp_extract(col(c), "([0-9]+\\.?[0-9]*)", 1) === ""
+              ).groupBy(col(c)).count().orderBy(desc("count")).show(sampleTopN, truncate = false)
+            }
+          }
+ 
+          def edaAddGeoRegion(   df: DataFrame,    latitudeCol: String = "latitude",    longitudeCol: String = "longitude",    regionCol: String = "geo_region"): DataFrame = {
+            df.withColumn(
+              regionCol,
+              when(col(latitudeCol).isNull || col(longitudeCol).isNull, "unknown")
+                .when(col(longitudeCol) < -100 && col(latitudeCol) >= 37, "west_north")
+                .when(col(longitudeCol) < -100 && col(latitudeCol) < 37, "west_south")
+                .when(col(longitudeCol) >= -100 && col(longitudeCol) < -85 && col(latitudeCol) >= 37, "central_north")
+                .when(col(longitudeCol) >= -100 && col(longitudeCol) < -85 && col(latitudeCol) < 37, "central_south")
+                .when(col(longitudeCol) >= -85 && col(latitudeCol) >= 37, "east_north")
+                .otherwise("east_south")
+            )
+          }
+
+
+
+          def analyzePriceByGeoRegion(    df: DataFrame,    latitudeCol: String = "latitude",    
+          longitudeCol: String = "longitude",    regionCol: String = "geo_region"): DataFrame = {
+            val dfRegion = edaAddGeoRegion(df, latitudeCol, longitudeCol, regionCol)
+            val dfPrice = getValidNumericDF(dfRegion, "price", positiveOnly = true)
+
+            dfPrice
+              .groupBy(regionCol)
+              .agg(
+                count("*").alias("n"),
+                min("price").alias("min_price"),
+                expr("percentile_approx(price, 0.25)").alias("p25"),
+                expr("percentile_approx(price, 0.5)").alias("median_price"),
+                expr("percentile_approx(price, 0.75)").alias("p75"),
+                expr("percentile_approx(price, 0.95)").alias("p95"),
+                max("price").alias("max_price"),
+                round(avg("price"), 2).alias("mean_price"),
+                skewness("price").alias("skew_price")
+              )
+              .orderBy(desc("median_price"))
+          }
+  
+  
+      def analyzePriceByUrbanProximity(df: DataFrame): DataFrame = {
+        val dfPrice = getValidNumericDF(df, "price", positiveOnly = true)
+
+        dfPrice.filter(col("urban_level").isNotNull).groupBy("urban_level").agg(
+            count("*").alias("n"),
+            min("price").alias("min_price"),
+            expr("percentile_approx(price, 0.25)").alias("p25"),
+            expr("percentile_approx(price, 0.5)").alias("median_price"),
+            expr("percentile_approx(price, 0.75)").alias("p75"),
+            expr("percentile_approx(price, 0.95)").alias("p95"),
+            max("price").alias("max_price"),
+            round(avg("price"), 2).alias("mean_price"),
+            skewness("price").alias("skew_price")
+          ).orderBy(
+            when(col("urban_level") === "urban", 1).when(col("urban_level") === "suburban", 2).otherwise(3)
+          )
+      }
+
 
 
 
@@ -1262,559 +1789,45 @@
           }
         }
 
-        def mostrarNulosPorColumna(df: DataFrame): Unit = {
+    def analisisEDA(df: DataFrame): Unit = {
+      println("\n==================== EDA: Análisis Exploratorio ====================\n") 
 
-          val countExpr = count("*").alias("__total__")
-          val nullExprs = df.dtypes.map { case (colName, dataType) =>
-            val nullCondition = dataType match {
-              case "DoubleType" | "FloatType" => col(colName).isNull || col(colName).isNaN
-              case "StringType"               => col(colName).isNull || trim(col(colName)) === ""
-              case _                          => col(colName).isNull
-            }
-            sum(when(nullCondition, 1).otherwise(0)).alias(colName)
-          }
-          val resultRow  = df.select(countExpr +: nullExprs: _*).head()
-          val totalRows  = resultRow.getLong(0)
-
-          println("  Valores nulos por columna:")
-          println(f"${"Columna"}%-25s ${"Nulos"}%12s ${"% Nulos"}%12s")
-          println("-" * 52)
-
-          df.columns.zipWithIndex.foreach { case (colName, idx) =>
-            val nulls      = resultRow.getLong(idx + 1)   // +1: saltamos __total__
-            val porcentaje = if (totalRows > 0) nulls.toDouble / totalRows * 100.0 else 0.0
-            println(f"$colName%-25s $nulls%12d $porcentaje%11.2f%%")
-          }
-
-          println()
-        }
-
-        
-        //esta función realiza un análisis exploratorio de datos (EDA) específico para la variable objetivo "price",
-        
-        //esta función analiza la correlación entre variables numéricas y la variable objetivo "price", 
-        //calcula el coeficiente de correlación de Pearson para cada variable numérica en relación con "price".
-        def analyzeCorrelationWithPrice(df: DataFrame,targetCol: String = "price",excludeCols: Seq[String] = Seq() ): Unit = {
-
-          
-          val numCols = df.dtypes.filter { case (name, dtype) =>
-              dtype == "DoubleType"  ||
-              dtype == "FloatType"   ||
-              dtype == "IntegerType" ||
-              dtype == "LongType"
-            }.map(_._1).filterNot(c => c == targetCol || excludeCols.contains(c))
-            val corrExprs = numCols.map { c =>
-            corr(col(c), col(targetCol)).alias(c)
-          }
-
-          val corrRow = df.filter(col(targetCol).isNotNull).select(corrExprs: _*).head()
-          
-          val results = numCols.map { c =>
-            val idx   = corrRow.fieldIndex(c)
-            val value = if (corrRow.isNullAt(idx)) Double.NaN else corrRow.getDouble(idx)
-            (c, value)
-          }.sortBy { case (_, v) => -math.abs(v) }
-
-          // Imprimir tabla
-          val sep = "+" + "-" * 32 + "+" + "-" * 12 + "+" + "-" * 18 + "+"
-          println(s"\n  Correlación de variables numéricas con '$targetCol':")
-          println(sep)
-          println(f"| ${"Variable"}%-30s | ${"Corr"}%10s | ${"Interpretación"}%-16s |")
-          println(sep)
-
-          results.foreach { case (colName, v) =>
-            val bar = {
-              val filled = math.round(math.abs(v) * 10).toInt
-              val sign   = if (v >= 0) "▲" else "▼"
-              sign + "█" * filled + "░" * (10 - filled)
-            }
-            val label = math.abs(v) match {
-              case x if x.isNaN  => "sin datos"
-              case x if x >= 0.6 => "fuerte"
-              case x if x >= 0.3 => "moderada"
-              case x if x >= 0.1 => "débil"
-              case _             => "nula"
-            }
-            println(f"| $colName%-30s | ${v}%+10.4f | $bar $label%-6s |")
-          }
-
-          println(sep)
-          println("  ▲ positiva  ▼ negativa  █ intensidad  (ordenado por |corr| desc)\n")
-        }
-        
-    
-        //esta función filtra un DataFrame para obtener solo filas donde la columna numérica especificada no es nula,
-        // y opcionalmente solo valores positivos.
-        def getValidNumericDF(df: DataFrame,numericCol: String,positiveOnly: Boolean = false): DataFrame = {
-          val base = df.filter(col(numericCol).isNotNull)
-
-          if (positiveOnly) base.filter(col(numericCol) > 0)
-          else base
-        }
-
-      
-        //esta función calcula las estadísticas de una variable numérica específica, 
-        //como conteo, mínimo, máximo, media, mediana, desviación estándar, asimetría y curtosis.
-        def analyzeNumericGlobalStats(df: DataFrame,numericCol: String,positiveOnly: Boolean = false  ): DataFrame = {
-          val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
-
-          dfNum.select(
-            count("*").alias("n"),
-            min(numericCol).alias("min_value"),
-            max(numericCol).alias("max_value"),
-            avg(numericCol).alias("mean_value"),
-            expr(s"percentile_approx($numericCol, 0.5)").alias("median_value"),
-            stddev(numericCol).alias("std_value"),
-            skewness(numericCol).alias("skew_value"),
-            kurtosis(numericCol).alias("kurt_value")
-          )
-        }
-
-        //esta función calcula los percentiles de una variable numérica específica,
-        // permitiendo filtrar solo valores positivos y especificar los percentiles deseados.
-        def analyzeNumericPercentiles(df: DataFrame,numericCol: String,positiveOnly: Boolean = false,
-          probs: Seq[Double] = Seq(0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99, 0.995, 0.999)): DataFrame = {
-          val spark = df.sparkSession   
-          val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
-          val percentileValues = dfNum.stat.approxQuantile(numericCol, probs.toArray, 0.001)
-
-          probs.zip(percentileValues).map { case (p, v) => (p, v) }.toDF("percentile", s"${numericCol}_value")
-        }
-
-
-
-
-
-        //esta función compara la distribución de una variable numérica con su transformación logarítmica,
-        // calculando y mostrando los valores de asimetría (skewness) y curtosis (kurtosis) para ambas versiones de la variable.
-          def analyzeNumericVsLog(df: DataFrame,numericCol: String,positiveOnly: Boolean = true
-          ): DataFrame = {
-            val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
-              .withColumn("log_value_tmp", log1p(col(numericCol)))
-
-            dfNum.select(
-              skewness(numericCol).alias("skew_value"),
-              kurtosis(numericCol).alias("kurt_value"),
-              skewness("log_value_tmp").alias("skew_log_value"),
-              kurtosis("log_value_tmp").alias("kurt_log_value")
-            )
-          }
-
-        //esta función obtiene los registros con los valores más altos de una variable numérica ,
-        // filtrando solo valores positivos, y permite incluir columnas adicionales para contexto.
-          def getTopExtremeValues(df: DataFrame,numericCol: String,positiveOnly: Boolean = false,topN: Int = 30,extraCols: Seq[String] = Seq()
-          ): DataFrame = {
-            val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
-            val selectedCols = (Seq(numericCol) ++ extraCols.filter(df.columns.contains)).distinct
-
-            dfNum.select(selectedCols.map(col): _*).orderBy(desc(numericCol)).limit(topN)
-          }
-
-
-        //esta función agrega columnas al DataFrame con los límites de outliers basados en el rango intercuartílico (IQR) 
-        //para una variable numérica específica, utilizando los cuartiles Q1 y Q3.
-        //la utilizo para refactorizar el código y evitar repetir la lógica de cálculo de límites IQR 
-        //(getGlobalIQROutlierBounds y getNumericSegmentStats)
-        def addIQRBounds(df: DataFrame, q1Col: String = "q1", q3Col: String = "q3"): DataFrame = {
-          df.withColumn("iqr", col(q3Col) - col(q1Col))
-            .withColumn("lower_bound_iqr_1_5", col(q1Col) - lit(1.5) * col("iqr"))
-            .withColumn("upper_bound_iqr_1_5", col(q3Col) + lit(1.5) * col("iqr"))
-            .withColumn("lower_bound_iqr_3_0", col(q1Col) - lit(3.0) * col("iqr"))
-            .withColumn("upper_bound_iqr_3_0", col(q3Col) + lit(3.0) * col("iqr"))
-        }
-
-        //esta función calcula los límites de outliers basados en el rango intercuartílico (IQR) 
-        //para una variable numérica específica a nivel global,
-        def getGlobalIQROutlierBounds(df: DataFrame,numericCol: String,positiveOnly: Boolean = false): DataFrame = {
-          val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
-
-          val stats = dfNum.selectExpr(
-            s"percentile_approx($numericCol, 0.25) as q1",
-            s"percentile_approx($numericCol, 0.50) as median",
-            s"percentile_approx($numericCol, 0.75) as q3"
-          )
-
-          addIQRBounds(stats)
-        }
-
-        //esta función calcula estadísticas  de una variable numérica específica,segmentada por una o más columnas categóricas
-        //  y agrega límites de outliers basados en el rango intercuartílico (IQR)  para cada segmento
-        // permitiendo filtrar solo valores positivos y establecer un tamaño mínimo de grupo 
-        //para considerar las estadísticas válidas.
-
-
-        def getNumericSegmentStats(df: DataFrame, numericCol: String, segmentCols: Seq[String], 
-                                  positiveOnly: Boolean = false, minGroupSize: Int = 30): DataFrame = {
-          
-          val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
-          val validSegmentCols = segmentCols.filter(dfNum.columns.contains)
-
-          val stats = dfNum.groupBy(validSegmentCols.map(col): _*).agg(
-              count("*").alias("group_n"),
-              min(numericCol).alias("min_value"),
-              expr(s"percentile_approx($numericCol, 0.25)").alias("q1"),
-              expr(s"percentile_approx($numericCol, 0.5)").alias("median_value"),
-              expr(s"percentile_approx($numericCol, 0.75)").alias("q3"),
-              expr(s"percentile_approx($numericCol, 0.95)").alias("p95"),
-              expr(s"percentile_approx($numericCol, 0.99)").alias("p99"),
-              avg(numericCol).alias("mean_value"),
-              max(numericCol).alias("max_value"),
-              // 1. Agregamos Desviación Estándar para entender la dispersión real
-              stddev(numericCol).alias("stddev_value"),
-              skewness(numericCol).alias("skew_value")
-            )
-            .filter(col("group_n") >= minGroupSize).withColumn("cv_percentage", (col("stddev_value") / col("mean_value")) * 100)
-
-          val statsWithBounds = addIQRBounds(stats)
-            statsWithBounds.withColumn("lower_bound_iqr_1_5", when(col("lower_bound_iqr_1_5") < 0, 0).otherwise(col("lower_bound_iqr_1_5")))
-        }
-
-
-        //esta función identifica outliers sospechosos en una variable numérica específica,
-        // segmentada por una o más columnas categóricas,  utilizando límites basados en el rango intercuartílico (IQR) 
-        //y permitiendo filtrar solo valores positivos y establecer un valor mínimo absoluto para considerar un outlier como sospechoso.
-          def detectSuspiciousNumericOutliersBySegment(df: DataFrame,numericCol: String,segmentCols: Seq[String],
-          positiveOnly: Boolean = false,minGroupSize: Int = 30,iqrMultiplier: Double = 3.0,
-          minAbsoluteValue: Double = Double.MinValue,extraCols: Seq[String] = Seq()): DataFrame = {
-
-          val dfNum = getValidNumericDF(df, numericCol, positiveOnly)
-          val validSegmentCols = segmentCols.filter(dfNum.columns.contains)
-          val selectedExtraCols = extraCols.filter(dfNum.columns.contains).distinct
-
-          val baseStats = dfNum.groupBy(validSegmentCols.map(col): _*).agg(
-              count("*").alias("group_n"),
-              expr(s"percentile_approx($numericCol, 0.25)").alias("q1"),
-              expr(s"percentile_approx($numericCol, 0.5)").alias("segment_median_value"),
-              expr(s"percentile_approx($numericCol, 0.75)").alias("q3"),
-              expr(s"percentile_approx($numericCol, 0.95)").alias("segment_p95"),
-              expr(s"percentile_approx($numericCol, 0.99)").alias("segment_p99")
-            ).filter(col("group_n") >= minGroupSize)
-
-          val statsWithBounds = addIQRBounds(baseStats, "q1", "q3")
-            .withColumn("segment_upper_bound", col("q3") + lit(iqrMultiplier) * col("iqr"))
-            .withColumn("segment_lower_bound", col("q1") - lit(iqrMultiplier) * col("iqr"))
-
-          dfNum.join(statsWithBounds, validSegmentCols, "inner").withColumn(
-              s"${numericCol}_to_median_ratio",
-              when(col("segment_median_value").isNotNull && col("segment_median_value") =!= 0,
-                col(numericCol) / col("segment_median_value")
-              ).otherwise(lit(null).cast("double"))
-            ).withColumn(
-              s"${numericCol}_to_p95_ratio",
-              when(col("segment_p95").isNotNull && col("segment_p95") =!= 0,
-                col(numericCol) / col("segment_p95")
-              ).otherwise(lit(null).cast("double"))
-            ).withColumn(
-              s"${numericCol}_to_p99_ratio",
-              when(col("segment_p99").isNotNull && col("segment_p99") =!= 0,
-                col(numericCol) / col("segment_p99")
-              ).otherwise(lit(null).cast("double"))
-            ).filter(
-              (col(numericCol) > col("segment_upper_bound") || col(numericCol) < col("segment_lower_bound")) &&
-              col(numericCol) >= lit(minAbsoluteValue)
-            ).select(
-              validSegmentCols.map(col) ++
-              Seq(col("group_n"),col(numericCol),col("q1"),col("segment_median_value"),col("q3"),col("segment_p95"),
-              col("segment_p99"),col("iqr"),col("segment_lower_bound"),col("segment_upper_bound"),
-              col(s"${numericCol}_to_median_ratio"),col(s"${numericCol}_to_p95_ratio"),col(s"${numericCol}_to_p99_ratio")
-              ) ++
-              selectedExtraCols.map(col): _*
-            ).orderBy(desc(numericCol))
-        }
-
-          // ---------------------------------------------------------
-          // Resumen de outliers sospechosos por segmento
-          // ---------------------------------------------------------
-          def summarizeSuspiciousNumericOutliers(suspiciousDF: DataFrame,numericCol: String,segmentCols: Seq[String]): DataFrame = {
-            suspiciousDF.groupBy(segmentCols.map(col): _*).agg(
-                count("*").alias("n_suspicious"),
-                min(numericCol).alias("min_suspicious_value"),
-                expr(s"percentile_approx($numericCol, 0.5)").alias("median_suspicious_value"),
-                max(numericCol).alias("max_suspicious_value")
-              ).orderBy(desc("n_suspicious"), desc("max_suspicious_value"))
-          }
-
-          // ---------------------------------------------------------
-          // Mostrar DataFrame con título
-          // ---------------------------------------------------------
-          def showDF(title: String, df: DataFrame, n: Int = 50): Unit = {
-            println(s"\n=== $title ===")
-            df.show(n, truncate = false)
-          }
-
-          
-
-          def getValidPriceDF(df: DataFrame, priceCol: String = "price"): DataFrame = {
-            getValidNumericDF(df, priceCol, positiveOnly = true)
-          }
-
-          def analyzePriceGlobalStats(df: DataFrame, priceCol: String = "price"): DataFrame = {
-            analyzeNumericGlobalStats(df, priceCol, positiveOnly = true)
-              .withColumnRenamed("min_value", "min_price")
-              .withColumnRenamed("max_value", "max_price")
-              .withColumnRenamed("mean_value", "mean_price")
-              .withColumnRenamed("median_value", "median_price")
-              .withColumnRenamed("std_value", "std_price")
-              .withColumnRenamed("skew_value", "skew_price")
-              .withColumnRenamed("kurt_value", "kurt_price")
-          }
-        
-          def analyzePricePercentiles( df: DataFrame,priceCol: String = "price",
-          probs: Seq[Double] = Seq(0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99, 0.995, 0.999)): DataFrame = {
-            analyzeNumericPercentiles(df, priceCol, positiveOnly = true, probs = probs)
-          }
-
-        
-
-
-          def analyzePriceVsLogPrice(df: DataFrame, priceCol: String = "price"): DataFrame = {
-            analyzeNumericVsLog(df, priceCol, positiveOnly = true)
-              .withColumnRenamed("skew_value", "skew_price")
-              .withColumnRenamed("kurt_value", "kurt_price")
-              .withColumnRenamed("skew_log_value", "skew_log_price")
-              .withColumnRenamed("kurt_log_value", "kurt_log_price")
-          }
-
-          def analyzePriceByCategory(df: DataFrame,categoryCol: String,priceCol: String = "price",topN: Int = 50,minCount: Int = 1
-          ): DataFrame = {
-            val dfPrice = getValidPriceDF(df, priceCol)
-
-            dfPrice.groupBy(categoryCol).agg(count("*").alias("n"),
-                min(priceCol).alias("min_price"),
-                expr(s"percentile_approx($priceCol, 0.25)").alias("p25"),
-                expr(s"percentile_approx($priceCol, 0.5)").alias("median_price"),
-                expr(s"percentile_approx($priceCol, 0.75)").alias("p75"),
-                expr(s"percentile_approx($priceCol, 0.95)").alias("p95"),
-                max(priceCol).alias("max_price"),
-                avg(priceCol).alias("mean_price"),
-                skewness(priceCol).alias("skew_price")
-              ).filter(col("n") >= minCount).orderBy(desc("median_price")).limit(topN)
-          }
-
-          def analyzePriceByTopCategories(
-              df: DataFrame,categoryCol: String,priceCol: String = "price",topCategories: Int = 20
-          ): DataFrame = {
-            val dfPrice = getValidPriceDF(df, priceCol)
-
-            val topCats = dfPrice.groupBy(categoryCol).count().orderBy(desc("count")).limit(topCategories).select(categoryCol)
-
-            dfPrice.join(topCats, Seq(categoryCol)).groupBy(categoryCol).agg(
-                count("*").alias("n"),
-                min(priceCol).alias("min_price"),
-                expr(s"percentile_approx($priceCol, 0.25)").alias("p25"),
-                expr(s"percentile_approx($priceCol, 0.5)").alias("median_price"),
-                expr(s"percentile_approx($priceCol, 0.75)").alias("p75"),
-                expr(s"percentile_approx($priceCol, 0.95)").alias("p95"),
-                max(priceCol).alias("max_price"),
-                avg(priceCol).alias("mean_price")
-              ).orderBy(desc("median_price"))
-          }
-
-          def analyzePriceByYear(df: DataFrame, priceCol: String = "price"): DataFrame = {
-            val dfPrice = getValidPriceDF(df, priceCol)
-
-            dfPrice.groupBy("year").agg(
-                count("*").alias("n"),
-                expr(s"percentile_approx($priceCol, 0.5)").alias("median_price"),
-                expr(s"percentile_approx($priceCol, 0.95)").alias("p95"),
-                max(priceCol).alias("max_price"),
-                avg(priceCol).alias("mean_price"),
-                skewness(priceCol).alias("skew_price")
-              ).orderBy(desc("year"))
-          }
-
-          def getTopExpensiveVehicles(df: DataFrame,priceCol: String = "price",topN: Int = 30): DataFrame = {
-            getTopExtremeValues(
-              df = df,
-              numericCol = priceCol,
-              positiveOnly = true,
-              topN = topN,
-              extraCols = Seq("make_name", "model_name", "trim_name", "year", "body_type", "fuel_type", "is_new", "mileage", "horsepower")
-            )
-          }
-
-          def getTopKPriceByCategory( df: DataFrame,categoryCol: String,priceCol: String = "price",topCategories: Int = 15,k: Int = 5): DataFrame = {
-            val dfPrice = getValidPriceDF(df, priceCol)
-
-            val topCats = dfPrice.groupBy(categoryCol).count().orderBy(desc("count")).limit(topCategories).select(categoryCol)
-
-            val w = org.apache.spark.sql.expressions.Window.partitionBy(categoryCol).orderBy(desc(priceCol))
-
-            dfPrice.join(topCats, Seq(categoryCol)).withColumn("rn", row_number().over(w)).filter(col("rn") <= k).select(
-                col(categoryCol),col("model_name"),col("trim_name"),col("year"),col("body_type"),
-                col("is_new"),col("mileage"),col("horsepower"),col(priceCol),col("rn")
-              ).orderBy(col(categoryCol), desc(priceCol))
-          }
-
-          def summarizePriceTransformationDecision(df: DataFrame,priceCol: String = "price"): DataFrame = {
-            val stats = analyzeNumericGlobalStats(df, priceCol, positiveOnly = true)
-            val vsLog = analyzeNumericVsLog(df, priceCol, positiveOnly = true)
-
-            stats.crossJoin(vsLog.select(
-              col("skew_log_value"),
-              col("kurt_log_value")
-            )).withColumnRenamed("min_value", "min_price").withColumnRenamed("max_value", "max_price").withColumnRenamed("mean_value", "mean_price")
-            .withColumnRenamed("median_value", "median_price").withColumnRenamed("std_value", "std_price").withColumnRenamed("skew_value", "skew_price")
-            .withColumnRenamed("kurt_value", "kurt_price").withColumnRenamed("skew_log_value", "skew_log_price").withColumnRenamed("kurt_log_value", "kurt_log_price")
-          }
-
-          def getGlobalPricePercentiles(df: DataFrame, priceCol: String = "price"): DataFrame = {
-            analyzeNumericPercentiles(df,numericCol = priceCol,positiveOnly = true,probs = Seq(0.25, 0.50, 0.75, 0.95, 0.99, 0.995, 0.999))
-            .withColumnRenamed("percentiles", "price_percentiles")
-          }
-
-        
-          def getPriceSegmentStats(df: DataFrame,segmentCols: Seq[String],priceCol: String = "price",minGroupSize: Int = 30): DataFrame = {
-            getNumericSegmentStats(
-              df = df,
-              numericCol = priceCol,
-              segmentCols = segmentCols,
-              positiveOnly = true,
-              minGroupSize = minGroupSize
-            ).withColumnRenamed("min_value", "min_price").withColumnRenamed("median_value", "median_price")
-            .withColumnRenamed("mean_value", "mean_price").withColumnRenamed("max_value", "max_price").withColumnRenamed("skew_value", "skew_price")
-          }
-
-          def detectSuspiciousPriceOutliersBySegment(df: DataFrame,segmentCols: Seq[String],priceCol: String = "price",
-          minGroupSize: Int = 30,iqrMultiplier: Double = 3.0,minAbsolutePrice: Double = 100000.0): DataFrame = {
-            detectSuspiciousNumericOutliersBySegment(
-              df = df,
-              numericCol = priceCol,
-              segmentCols = segmentCols,
-              positiveOnly = true,
-              minGroupSize = minGroupSize,
-              iqrMultiplier = iqrMultiplier,
-              minAbsoluteValue = minAbsolutePrice,
-              extraCols = Seq("make_name", "model_name", "trim_name", "year", "body_type", "is_new", "mileage", "horsepower")
-            )
-            .withColumnRenamed("segment_median_value", "segment_median_price").withColumnRenamed("price_to_median_ratio", "price_to_median_ratio")
-            .withColumnRenamed("price_to_p95_ratio", "price_to_p95_ratio").withColumnRenamed("price_to_p99_ratio", "price_to_p99_ratio")
-          }
-
-          def detectSuspiciousPriceOutliersHierarchical(df: DataFrame,priceCol: String = "price",minGroupSize: Int = 30,
-              iqrMultiplier: Double = 3.0,
-              minAbsolutePrice: Double = 100000.0
-          ): DataFrame = {
-            val segmentCols = Seq("make_name", "body_type", "is_new").filter(df.columns.contains)
-
-            detectSuspiciousPriceOutliersBySegment(
-              df = df,
-              segmentCols = segmentCols,
-              priceCol = priceCol,
-              minGroupSize = minGroupSize,
-              iqrMultiplier = iqrMultiplier,
-              minAbsolutePrice = minAbsolutePrice
-            )
-          }
-
-          def summarizeSuspiciousPriceOutliers(
-              suspiciousDF: DataFrame,
-              segmentCols: Seq[String]
-          ): DataFrame = {
-            summarizeSuspiciousNumericOutliers(suspiciousDF, "price", segmentCols)
-              .withColumnRenamed("min_suspicious_value", "min_suspicious_price")
-              .withColumnRenamed("median_suspicious_value", "median_suspicious_price")
-              .withColumnRenamed("max_suspicious_value", "max_suspicious_price")
-          }
-
-          def topSuspiciousPriceOutliersByMake(
-              suspiciousDF: DataFrame,
-              topN: Int = 100
-          ): DataFrame = {
-            suspiciousDF.orderBy(desc("price")).limit(topN)
-          }
-            
-            
-
-
-          // ---------------------------------------------------------
-          // Analizar contenido de columnas string antes de procesarlas
-          // ---------------------------------------------------------
-          def analyzeStringColumnsContent(df: DataFrame,colsToAnalyze: Seq[String],sampleTopN: Int = 20          ): Unit = {
-
-            val validCols = colsToAnalyze.filter(df.columns.contains)
-
-            validCols.foreach { c =>
-              println(s"\n==================== Análisis de: $c ====================")
-
-              val base = df.select(col(c))
-
-              val summary = base.agg(
-                count("*").alias("n_total"),
-                sum(when(col(c).isNull, 1).otherwise(0)).alias("n_null"),
-                sum(when(trim(col(c)) === "", 1).otherwise(0)).alias("n_empty"),
-                sum(when(trim(lower(col(c))).isin("null", "none", "--", "n/a", "na"), 1).otherwise(0)).alias("n_placeholder"),
-                countDistinct(col(c)).alias("n_distinct"),
-                sum(
-                  when(
-                    regexp_extract(col(c), "([0-9]+\\.?[0-9]*)", 1) =!= "",
-                    1
-                  ).otherwise(0)
-                ).alias("n_with_number")
-              )
-
-              println("---- Resumen ----")
-              summary.show(false)
-
-              println("---- Top valores más frecuentes ----")
-              base.groupBy(col(c)).count().orderBy(desc("count")).show(sampleTopN, truncate = false)
-
-              println("---- Ejemplos con número extraíble ----")
-              base.filter(regexp_extract(col(c), "([0-9]+\\.?[0-9]*)", 1) =!= "").groupBy(col(c)).count()
-              .orderBy(desc("count")).show(sampleTopN, truncate = false)
-
-              println("---- Ejemplos sin número extraíble ----")
-              base.filter(
-                col(c).isNotNull &&
-                trim(col(c)) =!= "" &&
-                !trim(lower(col(c))).isin("null", "none", "--", "n/a", "na") &&
-                regexp_extract(col(c), "([0-9]+\\.?[0-9]*)", 1) === ""
-              ).groupBy(col(c)).count().orderBy(desc("count")).show(sampleTopN, truncate = false)
-            }
-          }
+      mostrarNulosPorColumna(df)
  
-          def analyzePriceByGeoRegion(    df: DataFrame,    latitudeCol: String = "latitude",    
-          longitudeCol: String = "longitude",    regionCol: String = "geo_region"): DataFrame = {
-            val dfRegion = Utils.addGeoRegion(df, latitudeCol, longitudeCol, regionCol)
-            val dfPrice = getValidNumericDF(dfRegion, "price", positiveOnly = true)
+      println("\n  Resumen de variables numéricas:\n")
 
-            dfPrice
-              .groupBy(regionCol)
-              .agg(
-                count("*").alias("n"),
-                min("price").alias("min_price"),
-                expr("percentile_approx(price, 0.25)").alias("p25"),
-                expr("percentile_approx(price, 0.5)").alias("median_price"),
-                expr("percentile_approx(price, 0.75)").alias("p75"),
-                expr("percentile_approx(price, 0.95)").alias("p95"),
-                max("price").alias("max_price"),
-                round(avg("price"), 2).alias("mean_price"),
-                skewness("price").alias("skew_price")
-              )
-              .orderBy(desc("median_price"))
-          }
-  
-  
-      def analyzePriceByUrbanProximity(df: DataFrame): DataFrame = {
-        val dfPrice = getValidNumericDF(df, "price", positiveOnly = true)
-
-        dfPrice.filter(col("urban_level").isNotNull).groupBy("urban_level").agg(
-            count("*").alias("n"),
-            min("price").alias("min_price"),
-            expr("percentile_approx(price, 0.25)").alias("p25"),
-            expr("percentile_approx(price, 0.5)").alias("median_price"),
-            expr("percentile_approx(price, 0.75)").alias("p75"),
-            expr("percentile_approx(price, 0.95)").alias("p95"),
-            max("price").alias("max_price"),
-            round(avg("price"), 2).alias("mean_price"),
-            skewness("price").alias("skew_price")
-          ).orderBy(
-            when(col("urban_level") === "urban", 1).when(col("urban_level") === "suburban", 2).otherwise(3)
-          )
-      }
+      resumenNumericoTabular(df.drop("vin","listing_id","sp_id")) // excluimos identificadores para este resumen
+      val categoricas = Seq("body_type","fuel_type","transmission","make_name","model_name","exterior_color",
+      "interior_color","wheel_system")
 
 
+      resumenCategoricoTabular(df, categoricas)
+
+      val booleanas = Seq("fleet","frame_damaged","franchise_dealer","has_accidents","isCab","is_cpo","is_new","is_oemcpo","salvage","theft_title")
+
+      println("\n  Resumen de variables booleanas:\n")
+      resumenBooleanasTabular(df, booleanas)
+
+      val textoNoEstructurado = Seq("description", "major_options")
+      resumenTextoTabular(df, textoNoEstructurado)
+
+      val malTipadas = Seq("engine_cylinders","power","torque","back_legroom","fuel_tank_volume","width","height")
+      resumenMalTipadasTabular(df, malTipadas)
+      
+      val identificadoras = Seq("vin", "listing_id", "sp_id")
+      resumenIdentificadoresTabular(df, identificadoras)
+      
+      val columnasString = df.schema.fields.filter(_.dataType.simpleString == "string").map(_.name).toSeq
+      val candidatos = detectarParesRedundantesPorNombre(columnasString)
+      validarParesRedundantes(df, candidatos)
+
+      resumenGeografico(df)
+      
+      resumenTemporalTabular(df= df,listedDateCol  = "listed_date",yearCol= "year",daysOnMarketCol = "daysonmarket",nEjemplos= 10)
+      
+      analizarGruposFuncionales(df)
+    }
 
         
 
-   }
+   

@@ -1,4 +1,6 @@
+:load Utils.scala
 :load edaUtils.scala
+
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 spark.conf.set("spark.sql.debug.maxToStringFields", 200)
@@ -114,7 +116,7 @@ val spark = SparkSession.builder().appName("EDA Regresion").master("local[*]").g
    
 
 println("[EDA] Cargando dataset completo desde CSV o  parquet ...")
-val dfcarsdataFull=Utils.loadDataParquet(spark, PATH, RAWDATA, RAWPARQUET, FORCE_CREATE_PARQUET)
+val dfcarsdataFull=loadDataParquet(spark, PATH, RAWDATA, RAWPARQUET, FORCE_CREATE_PARQUET)
 val nFilasOriginal = dfcarsdataFull.count()
 val nColumnas = dfcarsdataFull.columns.length
 
@@ -130,16 +132,16 @@ println("\n")
 if (REALIZAR_EDA) {
   
 
-  edaUtils.analisisEDA(dfcarsdataFull)
-  //Utils.showTable(dfcarsdataFull, 10)
+   analisisEDA(dfcarsdataFull)
+  //showTable(dfcarsdataFull, 10)
 } else {
   println("=== Datos procesados cargados ===")
-   Utils.showTable(dfcarsdataFull, 10)
+   showTable(dfcarsdataFull, 10)
 }
  
 /*
-val dfFinal =  Utils.prepararDataset(spark, dfcarsdataFull, PATH, FORCE_PREPROCESS)
+val dfFinal =  prepararDataset(spark, dfcarsdataFull, PATH, FORCE_PREPROCESS)
  println(s"[EDA] Tratados: ${nFilasOriginal - dfFinal.count()}")
-Utils.mostrarResumenFinal(dfFinal)
+mostrarResumenFinal(dfFinal)
 */
  
