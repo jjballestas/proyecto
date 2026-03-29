@@ -554,7 +554,7 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
   dfWork = addIsPickupAndClean(dfWork)
   dfWork = cleanFuelType(dfWork)
   dfWork = extractStringNumericFeatures(dfWork)
-  dfWork = addGeographicFeatures(dfWork)
+  //dfWork = addGeographicFeatures(dfWork)
   dfWork = addTemporalFeatures(dfWork)
   dfWork = fillBooleanAsCategory(dfWork, Seq("fleet","frame_damaged","has_accidents","salvage","theft_title"))
   dfWork = treatOwnerCount(dfWork)

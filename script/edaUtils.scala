@@ -1737,7 +1737,7 @@
 
           def analisisEDA(df: DataFrame): Unit = {
             println("\n==================== EDA: Análisis Exploratorio ====================\n") 
-          /*
+          
             mostrarNulosPorColumna(df)
 
             println("\n  Resumen de variables numéricas:\n")
@@ -1962,7 +1962,7 @@
             val malTipadas = Seq("engine_cylinders","power","torque","back_legroom",
             "fuel_tank_volume","width","height","front_legroom", "length", "wheelbase", "maximum_seating")
             resumenMalTipadasTabular(df, malTipadas)
- */
+  
             val identificadoras = Seq("vin", "listing_id", "sp_id")
             resumenIdentificadoresTabular(df, identificadoras)
 
