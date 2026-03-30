@@ -42,7 +42,7 @@ val (dfTrain, dfTest) = if (!FORCE_SPLIT && trainExiste && testExiste) {
   println(s"   Columnas eliminadas: ${colsToDropModelo.length} → quedan ${dfClean.columns.length}")
 
   val dfFinal = crearSubconjuntoControlado(
-    dfClean, targetSize = 15000, seed = 42L, minRowsPerStratum = 150
+    dfClean, targetSize = 25000, seed = 42L, minRowsPerStratum = 250
   )
   println(s"   Filas: ${dfFinal.count()} | Columnas: ${dfFinal.columns.length}")
   crearOCargarSplit(
@@ -185,12 +185,15 @@ println("═" * 60)
 // ── Ronda 1: grid amplio ──────────────────────────────────────
 val modeloLR_R1 = Utils_models.ejecutarBusquedaTVS(
   spark, "LR Ronda 1", pipelineLR,
-  new ParamGridBuilder().addGrid(lr.regParam,Array(0.001, 0.01, 0.1))
-  .addGrid(lr.elasticNetParam,  Array(0.0, 0.5, 1.0)).build(),
+  new ParamGridBuilder().addGrid(lr.regParam,Array(0.0002, 0.0005, 0.001, 0.002, 0.005))
+  .addGrid(lr.elasticNetParam,  Array(0.7, 0.9, 1.0)).build(),
   dfTrainCast, evaluator,
   trainRatio     = 0.8,
   resultadosPath = resultadosPath + "tvs_lr_r1"
 )
+
+
+ 
 
 val bestPipelineLR_R1 = modeloLR_R1.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel]
 val mejorLR_R1        = bestPipelineLR_R1.stages.last.asInstanceOf[org.apache.spark.ml.regression.LinearRegressionModel]
@@ -200,7 +203,7 @@ println(f"  📌 Mejor R1 LR → regParam=$mejorRegParam%.4f  elasticNet=$mejorE
 
 // ── Ronda 2: refinamiento alrededor del mejor ─────────────────
 val elasticNetGrid: Array[Double] = {
-  if (mejorElastic == 0.0) Array(0.0, 0.1, 0.3)
+  if (mejorElastic == 0.0) Array(0.0002, 0.0005, 0.001, 0.002, 0.005)
   else if (mejorElastic == 1.0) Array(0.7, 0.9, 1.0)
   else Array(
     math.max(0.0, mejorElastic - 0.2),
@@ -240,7 +243,9 @@ println("═" * 60)
 // ── Ronda 1: grid amplio ──────────────────────────────────────
 val modeloGBT_R1 = Utils_models.ejecutarBusquedaTVS(
   spark, "GBT Ronda 1", pipelineGBT,
-  new ParamGridBuilder().addGrid(gbt.maxDepth, Array(3, 5, 7)).addGrid(gbt.stepSize, Array(0.05, 0.1, 0.2)).build(),
+  new ParamGridBuilder().addGrid(gbt.maxDepth, Array(4, 5, 6, 7))
+  .addGrid(gbt.stepSize, Array(0.05, 0.1))
+  .addGrid(gbt.maxIter,  Array(100, 150)).build(),
   dfTrainCast, evaluator,
   trainRatio     = 0.8,
   resultadosPath = resultadosPath + "tvs_gbt_r1"
@@ -271,8 +276,7 @@ val modeloGBT_R2 = Utils_models.ejecutarBusquedaTVS(
 )
 
 val bestPipelineGBT  = modeloGBT_R2.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel]
-val mejoresParamsGBT = bestPipelineGBT.stages.last
-                         .asInstanceOf[org.apache.spark.ml.regression.GBTRegressionModel]
+val mejoresParamsGBT = bestPipelineGBT.stages.last.asInstanceOf[org.apache.spark.ml.regression.GBTRegressionModel]
 println(f"  📌 FINAL GBT → maxDepth=${mejoresParamsGBT.getMaxDepth}  stepSize=${mejoresParamsGBT.getStepSize}%.4f  maxIter=${mejoresParamsGBT.getMaxIter}")
 
 // ══════════════════════════════════════════════════════════════
@@ -285,7 +289,7 @@ println("═" * 60)
 // ── Ronda 1: grid amplio ──────────────────────────────────────
 val modeloRF_R1 = Utils_models.ejecutarBusquedaTVS(
   spark, "RF Ronda 1", pipelineRF,
-  new ParamGridBuilder().addGrid(rf.numTrees, Array(50, 100, 200)).addGrid(rf.maxDepth, Array(5, 8, 10)).build(),
+  new ParamGridBuilder().addGrid(rf.numTrees, Array(100, 150, 200)).addGrid(rf.maxDepth, Array(8, 10, 12)).build(),
   dfTrainCast, evaluator,
   trainRatio     = 0.8,
   resultadosPath = resultadosPath + "tvs_rf_r1"

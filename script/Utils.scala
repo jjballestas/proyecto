@@ -16,7 +16,20 @@ Logger.getLogger("org").setLevel(Level.ERROR)
 Logger.getLogger("akka").setLevel(Level.ERROR)
 Logger.getLogger("org.apache.spark.scheduler.DAGScheduler").setLevel(Level.ERROR)
 Logger.getLogger("org.apache.spark.util.SizeEstimator").setLevel(Level.OFF)
-
+// ── Suprimir warnings de reflection ilegal de la JVM ─────────
+val originalErr = System.err
+val filteredErr = new java.io.PrintStream(originalErr) {
+  override def println(x: String): Unit = {
+    if (x != null && x.contains("illegal reflective access")) return
+    if (x != null && x.contains("WARNING: An illegal")) return
+    if (x != null && x.contains("WARNING: Please consider")) return
+    if (x != null && x.contains("WARNING: Use --illegal")) return
+    if (x != null && x.contains("WARNING: All illegal")) return
+    super.println(x)
+  }
+  override def println(x: Object): Unit = println(if (x == null) "null" else x.toString)
+}
+System.setErr(filteredErr)
 
  
   //esta función verifica si un archivo o directorio existe en HDFS
