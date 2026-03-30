@@ -18,8 +18,8 @@ val PATH                 = "/home/usuario/regresion/proyecto/"
 val RAWDATA              = "dataset/used_cars_data.csv"
 val RAWPARQUET           = "dataset/parquet/raw_data"
 val FORCE_CREATE_PARQUET = false
-val FORCE_PREPROCESS     = false
-val FORCE_SPLIT          = false
+val FORCE_PREPROCESS     = true
+val FORCE_SPLIT          = true
 val trainPath            = PATH + "dataset/parquet/train"
 val testPath             = PATH + "dataset/parquet/test"
 
@@ -55,38 +55,56 @@ val (dfTrain, dfTest) = if (!FORCE_SPLIT && trainExiste && testExiste) {
     forceSplit  = FORCE_SPLIT
   )
 }
-mostrarResumenFinal(dfTrain)
 
-mostrarResumenFinal(dfTest)
+
+
+  println("  RESUMEN DATASET TRAIN ")
+
+  mostrarResumenFinal(dfTrain)
+
+  println(" \n RESUMEN DATASET TEST ")
+  mostrarResumenFinal(dfTest)
+
+    
+  val numColsCandidatas = Array(
+    "latitude", "longitude", "gama_alta", "is_pickup", "daysonmarket",
+    "highway_fuel_economy", "horsepower", "mileage", "owner_count",
+    "seller_rating", "year",
+    "power_num", "torque_num", "engine_cylinders_num", "back_legroom_num",
+    "front_legroom_num", "fuel_tank_volume_num", "height_num", "length_num",
+    "maximum_seating_num", "wheelbase_num", "width_num",
+    "vehicle_age_at_listing", "owner_count_missing", "height_num_missing",
+    "length_num_missing", "width_num_missing", "wheelbase_num_missing",
+    "maximum_seating_num_missing", "front_legroom_num_missing",
+    "back_legroom_num_missing", "missing_dimensions", "power_num_missing",
+    "torque_num_missing", "engine_cylinders_num_missing",
+    "engine_displacement_missing", "fuel_tank_volume_num_missing",
+    "city_fuel_economy_missing", "highway_fuel_economy_missing",
+    "horsepower_missing", "mileage_missing", "seller_rating_missing",
+    "power_density",
+    "description_length", "option_count",
+    "has_offroadpackage", "has_navigationsystem", "has_thirdrowseating",
+    "has_sunroof_moonroof", "has_parkingsensors", "has_heatedseats",
+    "has_adaptivecruisecontrol", "has_blindspotmonitoring",
+    "has_backupcamera", "has_leatherseats", "has_multizoneclimatecontrol"
+  )
+
+  val strColsCandidatas = Array(
+    "make_name", "body_type", "fuel_type_clean", "engine_type",
+    "fleet", "has_accidents", "transmission", "wheel_system"
+  )
+
+  val boolColsCandidatas = Array("is_new", "franchise_dealer")
+
+  // ── Resolver contra el DataFrame real ─────────────────────────
+  val (numCols, strCols, boolCols) = resolverColumnas(
+    dfTrain, numColsCandidatas, strColsCandidatas, boolColsCandidatas
+  )
+
+  val boolAsCols = boolCols
+
 
  
-// ══════════════════════════════════════════════════════════════
-// 2. DEFINICIÓN DE COLUMNAS
-// ══════════════════════════════════════════════════════════════
-val strCols = Array(
-  "make_name", "body_type", "fuel_type_clean", "engine_type",
-  "fleet",    "has_accidents",
-      "transmission", "wheel_system" 
-)
-
-val boolCols = Array("is_new", "franchise_dealer")
-
-val numCols = Array(
-  "latitude", "longitude","gama_alta", "is_pickup", "daysonmarket", "highway_fuel_economy",
-  "horsepower", "mileage", "owner_count", "seller_rating", "year",
-  "power_num", "torque_num", "engine_cylinders_num", "back_legroom_num",
-  "front_legroom_num", "fuel_tank_volume_num", "height_num", "length_num",
-  "maximum_seating_num", "wheelbase_num", "width_num", 
-  "vehicle_age_at_listing", "owner_count_missing", "height_num_missing",
-  "length_num_missing", "width_num_missing", "wheelbase_num_missing",
-  "maximum_seating_num_missing", "front_legroom_num_missing",
-  "back_legroom_num_missing", "missing_dimensions", "power_num_missing",
-  "torque_num_missing", "engine_cylinders_num_missing",
-  "engine_displacement_missing", "fuel_tank_volume_num_missing",
-  "city_fuel_economy_missing", "highway_fuel_economy_missing",
-  "horsepower_missing", "mileage_missing", "seller_rating_missing",
-  "power_density"
-)
 
 // ══════════════════════════════════════════════════════════════
 // 3. CAST BOOLEANOS → DOUBLE

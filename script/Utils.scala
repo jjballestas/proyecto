@@ -275,33 +275,58 @@ def treatSavingsAmount(df: DataFrame, mode: String = "binary"): DataFrame =
   }
 
 
-          def addMajorOptionsFeaturesFromData(df: DataFrame,optionsCol: String     = "major_options",
-          descriptionCol: String = "description",
-          opcionesRelevantes: Seq[String] = Seq("offroadpackage", "navigationsystem", "thirdrowseating", 
-          "sunroof/moonroof", "parkingsensors", "heatedseats","adaptivecruisecontrol", "blindspotmonitoring",
-          "backupcamera", "leatherseats", "multizoneclimatecontrol")): DataFrame = {
+  def addMajorOptionsFeaturesFromData(df: DataFrame,optionsCol: String     = "major_options",
+  descriptionCol: String = "description",
+  opcionesRelevantes: Seq[String] = Seq("offroadpackage", "navigationsystem", "thirdrowseating", 
+  "sunroof/moonroof", "parkingsensors", "heatedseats","adaptivecruisecontrol", "blindspotmonitoring",
+  "backupcamera", "leatherseats", "multizoneclimatecontrol")): DataFrame = {
 
-              val dfDesc = df.withColumn("description_length",when(col(descriptionCol).isNull, 0)
-              .otherwise(length(col(descriptionCol)))).drop(descriptionCol)
+      val dfDesc = df.withColumn("description_length",when(col(descriptionCol).isNull, 0)
+      .otherwise(length(col(descriptionCol)))).drop(descriptionCol)
 
-              val dfNorm = dfDesc.withColumn("options_clean",when(col(optionsCol).isNull, "no_options_reported")
-              .otherwise(regexp_replace(lower(col(optionsCol)), "[\\[\\]'\"\\s]", "")))
+      val dfNorm = dfDesc.withColumn("options_clean",when(col(optionsCol).isNull, "no_options_reported")
+      .otherwise(regexp_replace(lower(col(optionsCol)), "[\\[\\]'\"\\s]", "")))
 
-              val dfCount = dfNorm.withColumn("option_count",when(col("options_clean") === "no_options_reported", 0)
-              .otherwise(size(split(regexp_replace(lower(col(optionsCol)), "[\\[\\]'\\\"\\s]", ""), ","))))
-              
-              println(s"\n  📌 Generando ${opcionesRelevantes.length} variables binarias desde $optionsCol:")
-              opcionesRelevantes.foreach(t =>
-                println(s"     → has_${t.replaceAll("[^a-z0-9]", "_")}"))
-                
-              val dfWithFlags = opcionesRelevantes.foldLeft(dfCount) { (acc, termino) =>
-              val colName = s"has_${termino.replaceAll("[^a-z0-9]", "_")}"
-              acc.withColumn(colName, col("options_clean").contains(termino).cast("int"))
-              }
-              dfWithFlags.drop("options_clean", optionsCol)
-         }
+      val dfCount = dfNorm.withColumn("option_count",when(col("options_clean") === "no_options_reported", 0)
+      .otherwise(size(split(regexp_replace(lower(col(optionsCol)), "[\\[\\]'\\\"\\s]", ""), ","))))
+      
+      println(s"\n  📌 Generando ${opcionesRelevantes.length} variables binarias desde $optionsCol:")
+      opcionesRelevantes.foreach(t =>
+        println(s"     → has_${t.replaceAll("[^a-z0-9]", "_")}"))
+        
+      val dfWithFlags = opcionesRelevantes.foldLeft(dfCount) { (acc, termino) =>
+      val colName = s"has_${termino.replaceAll("[^a-z0-9]", "_")}"
+      acc.withColumn(colName, col("options_clean").contains(termino).cast("int"))
+      }
+      dfWithFlags.drop("options_clean", optionsCol)
+  }
 
+  def resolverColumnas(df: DataFrame,numColsCandidatas: Array[String],
+  strColsCandidatas: Array[String],boolColsCandidatas: Array[String]): (Array[String], Array[String], Array[String]) = {
 
+      val colsDisponibles = df.columns.toSet
+
+      val numCols  = numColsCandidatas.filter(colsDisponibles.contains)
+      val strCols  = strColsCandidatas.filter(colsDisponibles.contains)
+      val boolCols = boolColsCandidatas.filter(colsDisponibles.contains)
+
+      val numFaltantes  = numColsCandidatas.filterNot(colsDisponibles.contains)
+      val strFaltantes  = strColsCandidatas.filterNot(colsDisponibles.contains)
+      val boolFaltantes = boolColsCandidatas.filterNot(colsDisponibles.contains)
+
+    
+
+      if (numFaltantes.nonEmpty)
+        println(s"  ⚠️  numCols  faltantes: ${numFaltantes.mkString(", ")}")
+      if (strFaltantes.nonEmpty)
+        println(s"  ⚠️  strCols  faltantes: ${strFaltantes.mkString(", ")}")
+      if (boolFaltantes.nonEmpty)
+        println(s"  ⚠️  boolCols faltantes: ${boolFaltantes.mkString(", ")}")
+
+      println(s"  ══════════════════════════════════════════\n")
+
+      (numCols, strCols, boolCols)
+ }
 
 
 
@@ -309,9 +334,7 @@ def treatSavingsAmount(df: DataFrame, mode: String = "binary"): DataFrame =
 
     val df1 = addGeoRegion(df)
     val df2 = agregarFeaturesUrbanasHaversine(df1)
-
-    val colsToDrop = Seq("latitude", "longitude").filter(df2.columns.contains)
-    df2.drop(colsToDrop: _*)
+     df2 
   }
 
   // ---------------------------------------------------------
@@ -547,7 +570,7 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
 
   // Fase 1: limpieza y feature engineering
   val colsToDrop = Seq("combine_fuel_economy","is_certified","vehicle_damage_category",
-    "vin","listing_id","sp_id","main_picture_url","description","transmission_display",
+    "vin","listing_id","sp_id","main_picture_url","transmission_display",
     "wheel_system_display","listing_color","dealer_zip","sp_name",
     "bed","cabin","is_cpo","is_oemcpo","isCab","franchise_make" ,"frame_damaged", "salvage", "theft_title")
 
@@ -582,7 +605,7 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
   ,"transmission","trim_name","wheel_system"))
 
   val colsToDropPost = Seq("engine_displacement","city_fuel_economy","power","torque",
-    "engine_cylinders","trimId","listed_date","bed_height","bed_length","major_options")
+    "engine_cylinders","trimId","listed_date","bed_height","bed_length","major_options","description")
   dfImp = dropColumns(dfImp, colsToDropPost)
   dfImp = transformTargetToLog(dfImp)
 
@@ -614,9 +637,7 @@ def mostrarResumenFinal(df: DataFrame): Unit = {
     }
   }
 
-    println("\n" + "=" * sepAncho)
-    println("  RESUMEN DATASET FINAL")
-    println("=" * sepAncho)
+    
 
     // ── Dimensiones ───────────────────────────────────────────
     println(f"\n  📌 Registros : $total%,d")
@@ -726,12 +747,7 @@ rawParquet: String,forceCreateParquet: Boolean = false,forcePreprocess: Boolean 
 }
 
 
-def crearSubconjuntoControlado(
-    df: DataFrame,
-    targetSize: Int = 400000,
-    seed: Long = 42L,
-    minRowsPerStratum: Int = 500
-): DataFrame = {
+def crearSubconjuntoControlado(df: DataFrame,targetSize: Int = 400000,seed: Long = 42L,minRowsPerStratum: Int = 500): DataFrame = {
 
   require(df.columns.contains("year"), "La columna 'year' es obligatoria.")
   require(df.columns.contains("body_type"), "La columna 'body_type' es obligatoria.")
@@ -745,9 +761,7 @@ def crearSubconjuntoControlado(
   // ---------------------------------------------------------
   // 1. Filtro básico de seguridad
   // ---------------------------------------------------------
-  val dfBase = df
-    .filter(col("log_price").isNotNull)
-    .filter(col("year").isNotNull)
+  val dfBase = df.filter(col("log_price").isNotNull).filter(col("year").isNotNull)
 
   val totalRows = dfBase.count()
   println(s"📌 Filas válidas de entrada   : $totalRows")
@@ -756,33 +770,12 @@ def crearSubconjuntoControlado(
     println("✅ El tamaño objetivo es mayor o igual que el dataset. Se devuelve el dataset completo.\n")
     return dfBase
   }
+ 
+  val dfStrata = dfBase.withColumn("year_bin",when(col("year") >= 2019, "recent")
+  .when(col("year") >= 2014, "mid").otherwise("old")).withColumn("body_type_stratum",
+  coalesce(trim(col("body_type")), lit("unknown"))).withColumn("stratum",concat_ws("_", col("year_bin"), col("body_type_stratum")))
 
-  // ---------------------------------------------------------
-  // 2. Crear bins temporales y estrato
-  // ---------------------------------------------------------
-  val dfStrata = dfBase
-    .withColumn(
-      "year_bin",
-      when(col("year") >= 2019, "recent")
-        .when(col("year") >= 2014, "mid")
-        .otherwise("old")
-    )
-    .withColumn(
-      "body_type_stratum",
-      coalesce(trim(col("body_type")), lit("unknown"))
-    )
-    .withColumn(
-      "stratum",
-      concat_ws("_", col("year_bin"), col("body_type_stratum"))
-    )
-
-  // ---------------------------------------------------------
-  // 3. Recuento por estrato
-  // ---------------------------------------------------------
-  val strataCounts = dfStrata
-    .groupBy("stratum")
-    .count()
-    .cache()
+  val strataCounts = dfStrata.groupBy("stratum").count().cache()
 
   val numStrata = strataCounts.count()
   val baseFraction = targetSize.toDouble / totalRows.toDouble
@@ -790,15 +783,8 @@ def crearSubconjuntoControlado(
   println(s"📌 Número de estratos         : $numStrata")
   println(f"📌 Fracción base              : $baseFraction%.6f")
 
-  // ---------------------------------------------------------
-  // 4. Construir fracciones por estrato
-  //    Regla:
-  //    - estratos grandes: fracción base
-  //    - estratos pequeños: intentar preservar al menos minRowsPerStratum
-  // ---------------------------------------------------------
-  val fractions: Map[String, Double] = strataCounts
-    .collect()
-    .map { row =>
+
+  val fractions: Map[String, Double] = strataCounts.collect().map { row =>
       val stratum = row.getAs[String]("stratum")
       val count = row.getAs[Long]("count")
 
@@ -807,25 +793,15 @@ def crearSubconjuntoControlado(
         else math.min(1.0, math.max(baseFraction, minRowsPerStratum.toDouble / count.toDouble))
 
       stratum -> fraction
-    }
-    .toMap
+    }.toMap
 
   println(s"📌 Estratos con fracción calc.: ${fractions.size}")
 
-  // ---------------------------------------------------------
-  // 5. Muestreo estratificado
-  // ---------------------------------------------------------
-  val sampled = dfStrata
-    .stat
-    .sampleBy("stratum", fractions, seed)
+  val sampled = dfStrata.stat.sampleBy("stratum", fractions, seed).stat.sampleBy("stratum", fractions, seed)
 
   val sampledCount = sampled.count()
   println(s"📌 Filas tras sampleBy        : $sampledCount")
-
-  // ---------------------------------------------------------
-  // 6. Ajuste fino del tamaño
-  //    Si se pasa del objetivo, recorte aleatorio reproducible.
-  // ---------------------------------------------------------
+ 
   val dfFinal =
     if (sampledCount > targetSize) {
       val ratio = targetSize.toDouble / sampledCount.toDouble
@@ -835,8 +811,7 @@ def crearSubconjuntoControlado(
       sampled
     }
 
-  val result = dfFinal
-    .drop("year_bin", "body_type_stratum", "stratum")
+  val result = dfFinal.drop("year_bin", "body_type_stratum", "stratum")
 
   val finalCount = result.count()
   println(s"✅ Tamaño final aproximado    : $finalCount")
@@ -846,17 +821,9 @@ def crearSubconjuntoControlado(
 
   result
 }
-def crearOCargarSplit(
-    spark: SparkSession,
-    df: DataFrame,
-    trainPath: String,
-    testPath: String,
-    trainExiste: Boolean,
-    testExiste: Boolean,
-    forceSplit: Boolean = false,
-    trainRatio: Double = 0.8,
-    seed: Long = 42L
-): (DataFrame, DataFrame) = {
+
+def crearOCargarSplit(spark: SparkSession,df: DataFrame,trainPath: String,testPath: String,trainExiste: Boolean
+,testExiste: Boolean,forceSplit: Boolean = false,trainRatio: Double = 0.8,seed: Long = 42L): (DataFrame, DataFrame) = {
 
   val (dfTrain, dfTest) = if (!forceSplit && trainExiste && testExiste) {
     println("  ✅ Cargando train/test desde disco...")
@@ -881,25 +848,20 @@ def crearOCargarSplit(
 }
 
  
-def mostrarResultadosCV(
-    nombre: String,
-    cvModel: org.apache.spark.ml.tuning.CrossValidatorModel,
-    paramGrid: Array[org.apache.spark.ml.param.ParamMap]
-): Unit = {
+def mostrarResultadosCV(nombre: String,cvModel: org.apache.spark.ml.tuning.CrossValidatorModel,
+paramGrid: Array[org.apache.spark.ml.param.ParamMap]): Unit = {
   val avg = cvModel.avgMetrics
 
-  // Limpiar parámetros: eliminar UID, formatear floats, poner en una línea
+  
   def limpiarParams(pm: org.apache.spark.ml.param.ParamMap): String = {
-    pm.toSeq
-      .map { pair =>
+    pm.toSeq.map { pair =>
         val nombre = pair.param.name  // solo el nombre sin UID
         val valor  = pair.value match {
           case d: Double => f"$d%.4f".replaceAll("\\.?0+$", "")  // quitar ceros trailing
           case other     => other.toString
         }
         s"$nombre=$valor"
-      }
-      .mkString("  ")  // separar parámetros con dos espacios
+      }.mkString("  ")   
   }
 
   println(s"\n  ══════════════════════════════════════════════════════════")
@@ -908,10 +870,7 @@ def mostrarResultadosCV(
   println(f"  ${"#"}%-4s ${"Parámetros"}%-45s ${"RMSE_CV"}%10s")
   println("  " + "-" * 62)
 
-  paramGrid.zip(avg)
-    .sortBy(_._2)
-    .zipWithIndex
-    .foreach { case ((pm, rmse), idx) =>
+  paramGrid.zip(avg).sortBy(_._2).zipWithIndex.foreach { case ((pm, rmse), idx) =>
       println(f"  ${idx + 1}%-4d ${limpiarParams(pm)}%-45s $rmse%10.4f")
     }
 
