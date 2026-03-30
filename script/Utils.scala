@@ -362,11 +362,13 @@ def treatSavingsAmount(df: DataFrame, mode: String = "binary"): DataFrame =
     df.withColumn("owner_count_missing", col("owner_count").isNull.cast("int"))
       .withColumn("owner_count", when(col("owner_count").isNull, 0).otherwise(col("owner_count")))
   }
+ 
   def addTemporalFeatures(df: DataFrame): DataFrame = {
-    df.withColumn("listed_year", year(col("listed_date")))
-      .withColumn("listed_month", month(col("listed_date")))
-      .withColumn("vehicle_age_at_listing", year(col("listed_date")) - col("year"))
+    val rawAge = year(col("listed_date")) - col("year")
+    df.withColumn("listed_year",  year(col("listed_date"))).withColumn("listed_month", month(col("listed_date")))
+    .withColumn("vehicle_age_at_listing",when(rawAge.between(0, 30), rawAge).otherwise(lit(null).cast("double")))
   }
+
 
   def cleanFuelType(df: DataFrame): DataFrame = {
     df.withColumn(
@@ -547,7 +549,7 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
   val colsToDrop = Seq("combine_fuel_economy","is_certified","vehicle_damage_category",
     "vin","listing_id","sp_id","main_picture_url","description","transmission_display",
     "wheel_system_display","listing_color","dealer_zip","sp_name",
-    "bed","cabin","is_cpo","is_oemcpo","isCab")
+    "bed","cabin","is_cpo","is_oemcpo","isCab","franchise_make" ,"frame_damaged", "salvage", "theft_title")
 
   var dfWork = dropColumns(df, colsToDrop)
   dfWork = addGamaAlta(dfWork)

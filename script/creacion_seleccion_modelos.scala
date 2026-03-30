@@ -65,15 +65,14 @@ mostrarResumenFinal(dfTest)
 // ══════════════════════════════════════════════════════════════
 val strCols = Array(
   "make_name", "body_type", "fuel_type_clean", "engine_type",
-  "fleet", "frame_damaged", "franchise_make", "has_accidents",
-  "salvage", "theft_title", "transmission", "wheel_system",
-  "geo_region", "urban_level"
+  "fleet",   "franchise_make", "has_accidents",
+      "transmission", "wheel_system" 
 )
 
 val boolCols = Array("is_new", "franchise_dealer")
 
 val numCols = Array(
-  "gama_alta", "is_pickup", "daysonmarket", "highway_fuel_economy",
+  "latitude", "longitude","gama_alta", "is_pickup", "daysonmarket", "highway_fuel_economy",
   "horsepower", "mileage", "owner_count", "seller_rating", "year",
   "power_num", "torque_num", "engine_cylinders_num", "back_legroom_num",
   "front_legroom_num", "fuel_tank_volume_num", "height_num", "length_num",
