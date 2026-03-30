@@ -556,9 +556,9 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
   dfWork = addIsPickupAndClean(dfWork)
   dfWork = cleanFuelType(dfWork)
   dfWork = extractStringNumericFeatures(dfWork)
-  //dfWork = addGeographicFeatures(dfWork)
+  dfWork = addGeographicFeatures(dfWork)
   dfWork = addTemporalFeatures(dfWork)
-  dfWork = fillBooleanAsCategory(dfWork, Seq("fleet","frame_damaged","has_accidents","salvage","theft_title"))
+  dfWork = fillBooleanAsCategory(dfWork, Seq("fleet","has_accidents"))
   dfWork = treatOwnerCount(dfWork)
   dfWork = treatMileageOutliers(dfWork)
   dfWork = treatDaysOnMarket(dfWork)
@@ -578,8 +578,8 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
   dfImp = addPowerDensity(dfImp)
   dfImp = filterPriceErrors(dfImp)
   dfImp = addIsClassicFlag(dfImp)
-  dfImp = fillCategoricalUnknown(dfImp, Seq("interior_color","body_type","engine_type",
-    "franchise_make","transmission","trim_name","wheel_system"))
+  dfImp = fillCategoricalUnknown(dfImp, Seq("interior_color","body_type","engine_type" 
+  ,"transmission","trim_name","wheel_system"))
 
   val colsToDropPost = Seq("engine_displacement","city_fuel_economy","power","torque",
     "engine_cylinders","trimId","listed_date","bed_height","bed_length","major_options")
