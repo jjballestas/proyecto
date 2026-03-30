@@ -8,6 +8,10 @@ import scala.util.Try
 import scala.collection.immutable.ListMap
 import org.apache.spark.sql.types._
 import org.apache.spark.storage.StorageLevel
+ 
+ 
+import org.apache.spark.sql.expressions.Window
+
 Logger.getLogger("org").setLevel(Level.ERROR)
 Logger.getLogger("akka").setLevel(Level.ERROR)
 Logger.getLogger("org.apache.spark.scheduler.DAGScheduler").setLevel(Level.ERROR)
@@ -391,7 +395,26 @@ def treatSavingsAmount(df: DataFrame, mode: String = "binary"): DataFrame =
     df.withColumn("listed_year",  year(col("listed_date"))).withColumn("listed_month", month(col("listed_date")))
     .withColumn("vehicle_age_at_listing",when(rawAge.between(0, 30), rawAge).otherwise(lit(null).cast("double")))
   }
+ 
 
+    
+
+  def imputeVehicleAge(df: DataFrame): DataFrame = {
+
+    val medianAge = df.filter(col("vehicle_age_at_listing").isNotNull)
+    .selectExpr("percentile_approx(vehicle_age_at_listing, 0.5) as median_age").first().get(0)
+
+    val medianVal = if (medianAge == null) 5.0 else medianAge.toString.toDouble
+
+    val nullCount = df.filter(col("vehicle_age_at_listing").isNull).count()
+    println(f"  [imputeVehicleAge] nulls encontrados : $nullCount")
+    println(f"  [imputeVehicleAge] imputando con mediana: $medianVal%.1f años")
+
+    df.withColumn("vehicle_age_at_listing",
+      when(col("vehicle_age_at_listing").isNull, lit(medianVal)).otherwise(col("vehicle_age_at_listing")))
+  }
+
+  
 
   def cleanFuelType(df: DataFrame): DataFrame = {
     df.withColumn(
@@ -604,24 +627,36 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
   dfImp = fillCategoricalUnknown(dfImp, Seq("interior_color","body_type","engine_type" 
   ,"transmission","trim_name","wheel_system"))
 
-  val colsToDropPost = Seq("engine_displacement","city_fuel_economy","power","torque",
-    "engine_cylinders","trimId","listed_date","bed_height","bed_length","major_options","description")
+  
+  val colsToDropPost = Seq(
+    "engine_displacement", "city_fuel_economy", "power", "torque",
+    "engine_cylinders", "trimId", "listed_date", "bed_height", 
+    "bed_length", "major_options", "description",
+    "geo_region", "urban_level", "dist_to_major_city_miles",   
+    "is_classic",                                               
+    "listed_year", "listed_month"                              
+  )
+
   dfImp = dropColumns(dfImp, colsToDropPost)
+  dfImp = imputeVehicleAge(dfImp) 
   dfImp = transformTargetToLog(dfImp)
 
   // Fase 4: filtrar clásicos y persistir
+ 
   val dfFinal = dfImp.filter(col("is_classic") === 0)
   dfFinal.write.mode("overwrite").parquet(finalPath)
   println(s"  ✅ Dataset final guardado: ${dfFinal.count()} registros | ${dfFinal.columns.length} columnas")
 
+
+
   // Fase 5: eliminar pre_imputation
-  val preImputHdfsPath = new org.apache.hadoop.fs.Path(preImputPath)
+    val preImputHdfsPath = new org.apache.hadoop.fs.Path(preImputPath)
   if (fs.exists(preImputHdfsPath)) {
     fs.delete(preImputHdfsPath, true)
     println("  🗑  pre_imputation eliminado")
   }
 
-  dfFinal
+  spark.read.parquet(finalPath) 
 }
 
 
@@ -629,6 +664,11 @@ def mostrarResumenFinal(df: DataFrame): Unit = {
     val total     = df.count()
     val sepAncho  = 70
 
+
+    if (total == 0) {
+      println("\n  ⚠️  DataFrame vacío — sin resumen disponible")
+      return
+    }
     // esta función auxiliar imprime una secuencia de strings en columnas formateadas 
     // mejora la legibilidad del resumen final
   def imprimirEnColumnas(cols: Seq[String], colWidth: Int = 30, colsPorFila: Int = 3): Unit = {
@@ -742,6 +782,10 @@ rawParquet: String,forceCreateParquet: Boolean = false,forcePreprocess: Boolean 
       println("  🔄 dataset_final no encontrado — ejecutando pipeline completo...")
 
     val dfRaw = loadDataParquet(spark, path, rawData, rawParquet, forceCreateParquet)
+      println("  RESUMEN DATASET RAW DATA")
+
+       mostrarResumenFinal(dfRaw)
+
     prepararDataset(spark, dfRaw, path, forcePreprocess)
   }
 }
@@ -797,7 +841,7 @@ def crearSubconjuntoControlado(df: DataFrame,targetSize: Int = 400000,seed: Long
 
   println(s"📌 Estratos con fracción calc.: ${fractions.size}")
 
-  val sampled = dfStrata.stat.sampleBy("stratum", fractions, seed).stat.sampleBy("stratum", fractions, seed)
+  val sampled = dfStrata.stat.sampleBy("stratum", fractions, seed) 
 
   val sampledCount = sampled.count()
   println(s"📌 Filas tras sampleBy        : $sampledCount")
