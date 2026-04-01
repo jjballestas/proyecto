@@ -18,11 +18,11 @@ val PATH                 = "/home/usuario/regresion/proyecto/"
 val RAWDATA              = "dataset/used_cars_data.csv"
 val RAWPARQUET           = "dataset/parquet/raw_data"
 val FORCE_CREATE_PARQUET = false
-val FORCE_PREPROCESS     = true
-val FORCE_SPLIT          = true
+val FORCE_PREPROCESS     = false
+val FORCE_SPLIT          = false
 val trainPath            = PATH + "dataset/parquet/train"
 val testPath             = PATH + "dataset/parquet/test"
-
+val FORCE_SEARCH         = false
 // ══════════════════════════════════════════════════════════════
 // 1. CARGA Y SPLIT TRAIN / TEST
 // ══════════════════════════════════════════════════════════════
@@ -42,7 +42,7 @@ val (dfTrain, dfTest) = if (!FORCE_SPLIT && trainExiste && testExiste) {
   println(s"   Columnas eliminadas: ${colsToDropModelo.length} → quedan ${dfClean.columns.length}")
 
   val dfFinal = crearSubconjuntoControlado(
-    dfClean, targetSize = 25000, seed = 42L, minRowsPerStratum = 250
+    dfClean, targetSize = 150000, seed = 42L, minRowsPerStratum = 250
   )
   println(s"   Filas: ${dfFinal.count()} | Columnas: ${dfFinal.columns.length}")
   crearOCargarSplit(
@@ -86,7 +86,7 @@ val (dfTrain, dfTest) = if (!FORCE_SPLIT && trainExiste && testExiste) {
     "has_offroadpackage", "has_navigationsystem", "has_thirdrowseating",
     "has_sunroof_moonroof", "has_parkingsensors", "has_heatedseats",
     "has_adaptivecruisecontrol", "has_blindspotmonitoring",
-    "has_backupcamera", "has_leatherseats", "has_multizoneclimatecontrol"
+    "has_backupcamera", "has_leatherseats", "has_multizoneclimatecontrol","segmento_estado"
   )
 
 
@@ -109,7 +109,9 @@ val boolAsCols = boolCols
 // 4. CAST BOOLEANOS → DOUBLE
 // ══════════════════════════════════════════════════════════════
 val dfTrainCast = dfTrain.withColumn("is_new",col("is_new").cast("double"))
-.withColumn("franchise_dealer", col("franchise_dealer").cast("double"))
+.withColumn("franchise_dealer", col("franchise_dealer").cast("double")).cache()
+
+dfTrainCast.count()
 
 val dfTestCast = dfTest.withColumn("is_new",col("is_new").cast("double"))
 .withColumn("franchise_dealer", col("franchise_dealer").cast("double"))
@@ -159,7 +161,13 @@ println(s"   Features: ${strCols.length} OHE + ${numColsValidas.length} num + ${
 // ── 6.6 Definición de modelos ─────────────────────────────────
 val lr = new LinearRegression().setLabelCol("log_price").setFeaturesCol("features").setMaxIter(100).setElasticNetParam(0.5).setRegParam(0.01)
 
-val gbt = new GBTRegressor().setLabelCol("log_price").setFeaturesCol("features_raw").setMaxIter(100).setMaxDepth(2).setStepSize(0.1)
+//val gbt = new GBTRegressor().setLabelCol("log_price").setFeaturesCol("features_raw").setMaxIter(100).setMaxDepth(2).setStepSize(0.1)
+
+
+val gbt = new GBTRegressor().setLabelCol("log_price").setFeaturesCol("features_raw")
+.setMaxIter(300).setMaxDepth(5).setStepSize(0.1).setValidationIndicatorCol("is_validation")
+.setSeed(42L)
+
 
 val rf = new RandomForestRegressor().setLabelCol("log_price").setFeaturesCol("features_raw").setNumTrees(150).setMaxDepth(11).setSeed(42L)
 
@@ -189,9 +197,9 @@ val modeloLR_R1 = Utils_models.ejecutarBusquedaTVS(
   .addGrid(lr.elasticNetParam,  Array(0.7, 0.9, 1.0)).build(),
   dfTrainCast, evaluator,
   trainRatio     = 0.8,
-  resultadosPath = resultadosPath + "tvs_lr_r1"
+  resultadosPath = resultadosPath + "tvs_lr_r1",
+  forceSearch    = FORCE_SEARCH
 )
-
 
  
 
@@ -226,12 +234,18 @@ val modeloLR_R2 = Utils_models.ejecutarBusquedaTVS(
   new ParamGridBuilder().addGrid(lr.regParam,regParamGrid).addGrid(lr.elasticNetParam, elasticNetGrid).build(),
   dfTrainCast, evaluator,
   trainRatio     = 0.8,
-  resultadosPath = resultadosPath + "tvs_lr_r2"
+  resultadosPath = resultadosPath + "tvs_lr_r2",
+  forceSearch    = FORCE_SEARCH
 )
 
 val bestPipelineLR  = modeloLR_R2.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel]
 val mejoresParamsLR = bestPipelineLR.stages.last.asInstanceOf[org.apache.spark.ml.regression.LinearRegressionModel]
 println(f"  📌 FINAL LR → regParam=${mejoresParamsLR.getRegParam}%.4f  elasticNet=${mejoresParamsLR.getElasticNetParam}%.4f")
+
+
+
+Utils_models.analizarCoeficientesLR(spark = spark,bestPipelineLR = bestPipelineLR,dfTrainCast = dfTrainCast,
+topN = 30,outputPathOpt = Some(resultadosPath + "lr_final"))
 
 // ══════════════════════════════════════════════════════════════
 // 9. MODELO 2: GRADIENT BOOSTED TREES — 2 RONDAS TVS
@@ -240,22 +254,33 @@ println("\n" + "═" * 60)
 println("  MODELO 2: GRADIENT BOOSTED TREES")
 println("═" * 60)
 
+
+val dfTrainGBT = dfTrainCast.withColumn("is_validation", rand(seed = 42L) < 0.2)
+
 // ── Ronda 1: grid amplio ──────────────────────────────────────
 val modeloGBT_R1 = Utils_models.ejecutarBusquedaTVS(
   spark, "GBT Ronda 1", pipelineGBT,
-  new ParamGridBuilder().addGrid(gbt.maxDepth, Array(4, 5, 6, 7))
-  .addGrid(gbt.stepSize, Array(0.05, 0.1))
-  .addGrid(gbt.maxIter,  Array(100, 150)).build(),
-  dfTrainCast, evaluator,
-  trainRatio     = 0.8,
-  resultadosPath = resultadosPath + "tvs_gbt_r1"
+  new ParamGridBuilder().addGrid(gbt.maxDepth, Array(7, 8, 9))
+  .addGrid(gbt.stepSize, Array(0.15, 0.2, 0.25)).build(),dfTrainGBT,evaluator,
+  trainRatio     = 0.8,resultadosPath = resultadosPath + "tvs_gbt_r1",
+  forceSearch    = FORCE_SEARCH
 )
+
 
 val bestPipelineGBT_R1 = modeloGBT_R1.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel]
 val mejorGBT_R1        = bestPipelineGBT_R1.stages.last.asInstanceOf[org.apache.spark.ml.regression.GBTRegressionModel]
 val mejorDepth         = mejorGBT_R1.getMaxDepth
 val mejorStepSize      = mejorGBT_R1.getStepSize
-println(f"  📌 Mejor R1 GBT → maxDepth=$mejorDepth  stepSize=$mejorStepSize%.4f")
+val mejorIter     = mejorGBT_R1.getMaxIter
+val maxIterR1 = 150
+val iterGridR2 = if (mejorIter >= maxIterR1) { 
+    Array(mejorIter, mejorIter * 2) 
+} else {
+     
+    Array(math.max(10, (mejorIter * 0.8).toInt), mejorIter).distinct.sorted
+}
+
+println(f"  📌 Mejor R1 GBT → maxDepth=$mejorDepth  stepSize=$mejorStepSize%.4f  maxIter=$mejorIter")
 
 // ── Ronda 2: refinamiento ─────────────────────────────────────
 val modeloGBT_R2 = Utils_models.ejecutarBusquedaTVS(
@@ -269,10 +294,12 @@ val modeloGBT_R2 = Utils_models.ejecutarBusquedaTVS(
         math.max(0.01, mejorStepSize / 2),
         mejorStepSize,
         math.min(0.5,  mejorStepSize * 1.5)
-      ).distinct.sorted).addGrid(gbt.maxIter, Array(50, 100)).build(),
-  dfTrainCast, evaluator,
+      ).distinct.sorted).addGrid(gbt.maxIter, iterGridR2).build(),
+  dfTrainGBT, evaluator,
   trainRatio     = 0.8,
-  resultadosPath = resultadosPath + "tvs_gbt_r2"
+  resultadosPath = resultadosPath + "tvs_gbt_r2",
+  forceSearch    = FORCE_SEARCH
+
 )
 
 val bestPipelineGBT  = modeloGBT_R2.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel]
@@ -289,10 +316,12 @@ println("═" * 60)
 // ── Ronda 1: grid amplio ──────────────────────────────────────
 val modeloRF_R1 = Utils_models.ejecutarBusquedaTVS(
   spark, "RF Ronda 1", pipelineRF,
-  new ParamGridBuilder().addGrid(rf.numTrees, Array(100, 150, 200)).addGrid(rf.maxDepth, Array(8, 10, 12)).build(),
+  new ParamGridBuilder().addGrid(rf.numTrees, Array(150, 200, 300)).addGrid(rf.maxDepth, Array(12, 14, 16)).build(),
   dfTrainCast, evaluator,
   trainRatio     = 0.8,
-  resultadosPath = resultadosPath + "tvs_rf_r1"
+  resultadosPath = resultadosPath + "tvs_rf_r1",
+  forceSearch    = FORCE_SEARCH
+
 )
 
 val bestPipelineRF_R1 = modeloRF_R1.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel]
@@ -301,26 +330,31 @@ val mejorNumTrees     = mejorRF_R1.getNumTrees
 val mejorRFDepth      = mejorRF_R1.getMaxDepth
 println(f"  📌 Mejor R1 RF → numTrees=$mejorNumTrees  maxDepth=$mejorRFDepth")
 
-// ── Ronda 2: refinamiento ─────────────────────────────────────
+ 
+ 
+val depthGridR2 = (if (mejorRFDepth >= 14) {
+  Array(mejorRFDepth, mejorRFDepth + 1, mejorRFDepth + 2)
+} else if (mejorRFDepth >= 12) {
+  Array(12, 13, 14)
+} else {
+  Array(math.max(3, mejorRFDepth - 1), mejorRFDepth, mejorRFDepth + 1)
+}).distinct.sorted
+
+ 
+val treesGridR2 = Array(mejorNumTrees)
+
 val modeloRF_R2 = Utils_models.ejecutarBusquedaTVS(
   spark, "RF Ronda 2", pipelineRF,
-  new ParamGridBuilder()
-    .addGrid(rf.numTrees, Array(
-        math.max(20,  mejorNumTrees - 50),
-        mejorNumTrees,
-        math.min(300, mejorNumTrees + 50)
-      ).distinct.sorted)
-    .addGrid(rf.maxDepth, Array(
-        math.max(3,  mejorRFDepth - 1),
-        mejorRFDepth,
-        math.min(12, mejorRFDepth + 1)
-      ).distinct.sorted)
-    .addGrid(rf.minInstancesPerNode, Array(1, 5))
-    .build(),
+  new ParamGridBuilder().addGrid(rf.numTrees, treesGridR2).addGrid(rf.maxDepth,depthGridR2)
+  .addGrid(rf.minInstancesPerNode, Array(1, 3, 5)).build(),
   dfTrainCast, evaluator,
   trainRatio     = 0.8,
-  resultadosPath = resultadosPath + "tvs_rf_r2"
+  resultadosPath = resultadosPath + "tvs_rf_r2",
+  forceSearch    = FORCE_SEARCH
 )
+ 
+
+
 
 val bestPipelineRF  = modeloRF_R2.bestModel.asInstanceOf[org.apache.spark.ml.PipelineModel]
 val mejoresParamsRF = bestPipelineRF.stages.last.asInstanceOf[org.apache.spark.ml.regression.RandomForestRegressionModel]
@@ -364,3 +398,4 @@ Utils_models.evaluarModelo("RF  Optimizado",
   bestPipelineRF, dfTestCast, evaluator, Some(dfTrainCast))
 
 
+dfTrainCast.unpersist()

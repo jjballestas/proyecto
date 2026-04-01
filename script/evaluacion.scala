@@ -14,9 +14,7 @@ Logger.getLogger("akka").setLevel(Level.ERROR)
 Logger.getLogger("org.apache.spark.scheduler.DAGScheduler").setLevel(Level.ERROR)
 Logger.getLogger("org.apache.spark.util.SizeEstimator").setLevel(Level.OFF)
 
-// ══════════════════════════════════════════════════════════════
-// 0. SESIÓN Y RUTAS
-// ══════════════════════════════════════════════════════════════
+ 
 val spark = SparkSession.builder().appName("Evaluacion Modelo Final — TESCR 2026").master("local[*]").getOrCreate()
 spark.conf.set("spark.sql.debug.maxToStringFields", 200)
 
@@ -28,6 +26,8 @@ val modelosPath = PATH + "modelos/"
 println("\n" + "═" * 60)
 println("  CARGA DEL CONJUNTO DE PRUEBA")
 println("═" * 60)
+
+
 
 val dfTest = spark.read.parquet(testPath)
 val nTest  = dfTest.count()

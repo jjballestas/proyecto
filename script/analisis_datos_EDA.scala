@@ -42,9 +42,9 @@ if (REALIZAR_EDA) {
    showTable(dfcarsdataFull, 10)
 }
  
-/*
+ 
 val dfFinal =  prepararDataset(spark, dfcarsdataFull, PATH, FORCE_PREPROCESS)
  println(s"[EDA] Tratados: ${nFilasOriginal - dfFinal.count()}")
 mostrarResumenFinal(dfFinal)
-*/
+ 
  

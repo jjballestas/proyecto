@@ -8,9 +8,13 @@ import scala.util.Try
 import scala.collection.immutable.ListMap
 import org.apache.spark.sql.types._
 import org.apache.spark.storage.StorageLevel
- 
- 
 import org.apache.spark.sql.expressions.Window
+import spark.implicits._
+import org.apache.spark.ml.PipelineModel
+import org.apache.spark.ml.attribute.AttributeGroup
+
+
+
 
 Logger.getLogger("org").setLevel(Level.ERROR)
 Logger.getLogger("akka").setLevel(Level.ERROR)
@@ -25,6 +29,7 @@ val filteredErr = new java.io.PrintStream(originalErr) {
     if (x != null && x.contains("WARNING: Please consider")) return
     if (x != null && x.contains("WARNING: Use --illegal")) return
     if (x != null && x.contains("WARNING: All illegal")) return
+    if (x.contains("Asked to remove block"))        return
     super.println(x)
   }
   override def println(x: Object): Unit = println(if (x == null) "null" else x.toString)
@@ -566,7 +571,27 @@ def addPowerDensity(df: DataFrame): DataFrame = {
   )
 }
     
+  def addSegmentoVehiculo(df: DataFrame): DataFrame = {
+  val currentYear = 2026  
   
+  df.withColumn("segmento_estado",
+    when(
+      col("year") < 1996 || col("year").isNull, 
+      "clasico_o_muy_viejo"
+    ).when(
+    
+      coalesce(col("salvage"), lit(false)) === true || 
+      coalesce(col("frame_damaged"), lit(false)) === true || 
+      coalesce(col("theft_title"), lit(false)) === true ||
+      coalesce(col("has_accidents"), lit(false)) === true ||
+      coalesce(col("mileage"), lit(0.0)) > 200000,
+      "desguace_o_riesgo"
+    ).when(
+      col("year") >= (currentYear - 2) && coalesce(col("mileage"), lit(999999.0)) < 50,
+      "nuevo_o_seminuevo"
+    ).otherwise("estandar")
+  )
+}
 
 // Coches pre-1980 tienen lógica de precio diferente por su valor histórico y coleccionista, 
 // así que añadimos una flag para identificarlos y tratarlos aparte 
@@ -608,9 +633,13 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
   val colsToDrop = Seq("combine_fuel_economy","is_certified","vehicle_damage_category",
     "vin","listing_id","sp_id","main_picture_url","transmission_display",
     "wheel_system_display","listing_color","dealer_zip","sp_name",
-    "bed","cabin","is_cpo","is_oemcpo","isCab","franchise_make" ,"frame_damaged", "salvage", "theft_title")
+    "bed","cabin","is_cpo","is_oemcpo","isCab","franchise_make" )
+
+ 
+
 
   var dfWork = dropColumns(df, colsToDrop)
+  dfWork = addSegmentoVehiculo(dfWork)
   dfWork = addGamaAlta(dfWork)
   dfWork = addIsPickupAndClean(dfWork)
   dfWork = cleanFuelType(dfWork)
@@ -647,7 +676,7 @@ def prepararDataset(spark: SparkSession,df: DataFrame,path: String,forcePreproce
     "bed_length", "major_options", "description",
     "geo_region", "urban_level", "dist_to_major_city_miles",   
     "is_classic",                                               
-    "listed_year", "listed_month"                              
+    "listed_year", "listed_month"  ,"frame_damaged", "salvage", "theft_title"                            
   )
 
   dfImp = dropColumns(dfImp, colsToDropPost)
